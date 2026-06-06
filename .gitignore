@@ -1,0 +1,43 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# IDE settings
+.vscode/
+.idea/
+
+# AI Weights and Datasets (Crucial: Keep GitHub repo lightweight)
+*.pt
+*.onnx
+*.engine
+runs/
+datasets/
+data/
+gyard/
+data_1/
+data_2/
+medical_env/
+
+# OS Specific
+Thumbs.db
+.DS_Store
+
+# Executables or distribution outputs
+dist/
+build/
+*.exe
+
+runs/
+*.pt
+*.onnx
+*.mp4
+*.avi
+database/
+obj_train_data/
+images/
+labels/
