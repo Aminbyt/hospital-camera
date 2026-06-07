@@ -1,13 +1,16 @@
 """AI Detection Module - Handles YOLO, DeepFace, and MediaPipe models."""
 
+import config
 import os
-import cv2
-import math
+
 from ultralytics import YOLO
 from deepface import DeepFace
+
+import cv2
+import math
+
 import mediapipe as mp
 from PyQt5.QtCore import QThread, pyqtSignal
-import config
 
 
 class FaceRecognitionThread(QThread):

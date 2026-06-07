@@ -13,8 +13,8 @@ hands = mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.6)
 mp_draw = mp.solutions.drawing_utils
 
 # 3. Setup Camera and Wash Timer Variables
-cap = cv2.VideoCapture(1)  # Change to 1 if OBS blocks it
-REQUIRED_WASH_TIME = 20  # 20 seconds of hand washing required
+cap = cv2.VideoCapture(1)                   
+REQUIRED_WASH_TIME = 20  
 current_wash_time = 0
 last_hand_seen_time = 0
 is_washing = False

@@ -1,4 +1,7 @@
 """Main Application - Hospital AI Smart Scrub Sink Kiosk."""
+import config
+
+from ai_models import AIModels, FaceRecognitionThread
 
 import sys
 import os
@@ -12,8 +15,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QTimer, QSettings, QThread, pyqtSignal
 from PyQt5.QtGui import QIcon
 
-import config
-from ai_models import AIModels, FaceRecognitionThread
 from hand_wash_detector import HandWashDetector
 from sink_calibration import SinkCalibration, create_roi_dialog
 from data_logger import DataLogger, UserSessionManager
