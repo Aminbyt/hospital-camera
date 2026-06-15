@@ -1,5 +1,6 @@
 """AI Detection Module - Handles YOLO, DeepFace, and MediaPipe models."""
-
+import torch
+import tensorflow
 import config
 import os
 

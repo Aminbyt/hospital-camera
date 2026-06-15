@@ -6,7 +6,6 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QImage, QPixmap
 import config
 
-
 class DashboardTab(QWidget):
     """Main dashboard showing protocol status and hand washing timer."""
     
@@ -80,13 +79,24 @@ class DashboardTab(QWidget):
         # Wash label
         self.wash_label = QLabel("WASH TIMER: STANDBY")
         self.wash_label.setFont(QFont("Arial", 11))
+
+        self.wash_label.setMinimumHeight(50)
+        self.wash_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+
         right_layout.addWidget(self.wash_label)
 
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximum(config.MAX_WASH_TIME)
         self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setTextVisible(True) 
+        self.progress_bar.setFormat("%v SECONDS") 
+        self.progress_bar.setAlignment(Qt.AlignCenter) 
+        self.progress_bar.setStyleSheet(""" 
+                QProgressBar { border: 2px solid #000000;
+                background: #ffffff; height: 30px; text-align: center;
+                font-weight: bold; color: #000000; font-size: 14px; } 
+                QProgressBar::chunk { background-color: #1b4332; }""")
         right_layout.addWidget(self.progress_bar)
 
         right_layout.addStretch()
@@ -104,11 +114,7 @@ class DashboardTab(QWidget):
         self.auth_requested.emit()
 
     def update_video(self, frame):
-        """Update video display.
-        
-        Args:
-            frame: Current frame to display
-        """
+        """Update video display."""
         rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
@@ -117,12 +123,7 @@ class DashboardTab(QWidget):
             self.video_label.width(), self.video_label.height(), Qt.KeepAspectRatio))
 
     def set_identity(self, user_name, authenticated=True):
-        """Set identity display.
-        
-        Args:
-            user_name: User's display name
-            authenticated: bool - Whether user is authenticated
-        """
+        """Set identity display."""
         if authenticated:
             self.identity_label.setText(f"USER: {user_name.upper()} ✅")
             self.identity_label.setStyleSheet("color: #1b4332;")
@@ -131,12 +132,7 @@ class DashboardTab(QWidget):
             self.identity_label.setStyleSheet("color: #ff0000;")
 
     def set_auto_status(self, status_text, status_type="normal"):
-        """Set auto-scan status display.
-        
-        Args:
-            status_text: Status message
-            status_type: "normal", "warning", "success", "error"
-        """
+        """Set auto-scan status display."""
         colors = {
             "normal": "padding: 10px; background: #eeeeee; color: #000000; border: 1px solid #000000;",
             "warning": "padding: 10px; background: #ffff00; color: #000000; border: 1px solid #000000;",
@@ -147,34 +143,19 @@ class DashboardTab(QWidget):
         self.auto_status_label.setStyleSheet(colors.get(status_type, colors["normal"]))
 
     def set_ppe_status(self, mask_status, hat_status, disabled=False):
-        """Set PPE verification display.
-        
-        Args:
-            mask_status: "VERIFIED ✅" or "MISSING ❌"
-            hat_status: "VERIFIED ✅" or "MISSING ❌"
-            disabled: bool - Whether PPE check is disabled
-        """
+        """Set PPE verification display."""
         if disabled:
             self.ppe_label.setText("[ PPE CHECK:⏭️ DISABLED ]")
         else:
             self.ppe_label.setText(f"[ MASK: {mask_status} ]    [ HAT: {hat_status} ]")
 
     def set_wash_status(self, status_text, progress_value):
-        """Set hand washing status.
-        
-        Args:
-            status_text: Status message
-            progress_value: Progress bar value
-        """
+        """Set hand washing status."""
         self.wash_label.setText(status_text)
         self.progress_bar.setValue(progress_value)
 
     def set_master_status(self, ready=False):
-        """Set master status display.
-        
-        Args:
-            ready: bool - Whether all checks pass
-        """
+        """Set master status display."""
         if ready:
             self.master_status.setText("STATUS: PROCEED TO Operating Room ✅")
             self.master_status.setStyleSheet(

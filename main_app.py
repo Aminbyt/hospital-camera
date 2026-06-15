@@ -1,7 +1,10 @@
 """Main Application - Hospital AI Smart Scrub Sink Kiosk."""
+import torch
+import tensorflow
 import config
 
 from ai_models import AIModels, FaceRecognitionThread
+
 
 import sys
 import os
