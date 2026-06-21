@@ -68,10 +68,7 @@ class DashboardTab(QWidget):
         right_layout.addSpacing(20)
 
         # Authentication button
-        self.btn_auth = QPushButton("STEP 1: SCAN FACE (REMOVE MASK)")
-        self.btn_auth.clicked.connect(self.on_auth_clicked)
-        right_layout.addWidget(self.btn_auth)
-
+        
         self.btn_roi = QPushButton("SET MANUAL SINL ZONE")
         self.btn_roi.setStyleSheet ("padding: 10px; font-weight: bold; background: #e9ecef")
         self.btn_roi.clicked.connect(self.roi_requested.emit)

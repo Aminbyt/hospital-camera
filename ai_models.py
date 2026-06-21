@@ -16,6 +16,10 @@ import math
 import mediapipe as mp
 from PyQt5.QtCore import QThread, pyqtSignal
 
+# ... (keep your imports) ...
+from PyQt5.QtCore import QThread, pyqtSignal
+
+# --- ADD THESE TWO GLOBAL VARIABLES ---
 GLOBAL_RECOGNIZER = None
 GLOBAL_LABEL_MAP = {}
 
@@ -29,7 +33,6 @@ class FaceRecognitionThread(QThread):
         self.db_path = db_path
 
     def run(self):
-        """Execute face recognition instantly using cached memory."""
         global GLOBAL_RECOGNIZER, GLOBAL_LABEL_MAP
         try:
             face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -43,7 +46,7 @@ class FaceRecognitionThread(QThread):
             (x, y, w, h) = faces[0]
             live_face_roi = gray_frame[y:y+h, x:x+w]
 
-            # --- THE FIX: ONLY TRAIN IF WE HAVEN'T TRAINED YET ---
+            # --- ONLY TRAIN THE DB IF WE HAVEN'T YET ---
             if GLOBAL_RECOGNIZER is None:
                 print("[INFO] Training Face Database into memory...")
                 recognizer = cv2.face.LBPHFaceRecognizer_create()
@@ -76,11 +79,10 @@ class FaceRecognitionThread(QThread):
                     return
 
                 recognizer.train(faces_db, np.array(labels))
-                # Save it to global memory!
                 GLOBAL_RECOGNIZER = recognizer
                 GLOBAL_LABEL_MAP = label_map
 
-            # 4. Predict Identity Instantly using Memory!
+            # Predict Identity Instantly from RAM
             label, confidence = GLOBAL_RECOGNIZER.predict(live_face_roi)
 
             if confidence < 75:
@@ -91,7 +93,6 @@ class FaceRecognitionThread(QThread):
         except Exception as e:
             print(f"[ERROR] Face Auth Error: {e}")
             self.result_signal.emit("UNKNOWN")
-
 
 class AIModels:
     """Manages all AI models: YOLO, DeepFace, MediaPipe."""

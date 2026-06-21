@@ -134,10 +134,14 @@ class HomeSummaryTab(QWidget):
 
     def update_sink_data(self, sink_name, data):
         """Triggered automatically by the background threads to update the UI."""
-        if sink_name not in self.sink_cards:
+       
+        # --- THE FIX: Convert "SINK_1" to "SINK 1" so the dictionary finds it! ---
+        clean_name = sink_name.replace("_", " ")
+
+        if clean_name not in self.sink_cards:
             return
            
-        labels = self.sink_cards[sink_name]
+        labels = self.sink_cards[clean_name]
        
         # Update User Status & Color
         user = data.get('user', 'EMPTY')

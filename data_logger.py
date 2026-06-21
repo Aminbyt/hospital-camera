@@ -4,6 +4,7 @@ import os
 import time
 import pandas as pd
 import requests
+import threading
 import config
 
 
@@ -19,6 +20,44 @@ class DataLogger:
         """Ensure database directories exist."""
         os.makedirs(config.REG_PATH, exist_ok=True)
         os.makedirs(config.INFO_PATH, exist_ok=True)
+
+        def log_session(self, current_user, login_time, wash_status, mask_status, hat_status):
+            if not current_user:
+                return False
+
+            try:
+                date_str = time.strftime("%Y-%m-%d")
+                excel_file = os.path.join(config.INFO_PATH, f"{date_str}.xlsx")
+
+                parts = current_user.split(" ")
+                fname = parts[0] if len(parts) > 0 else "UNKNOWN"
+                lname = parts[1] if len(parts) > 1 else ""
+
+                new_data = pd.DataFrame([{
+                    "Date": date_str,
+                    "Name": fname,
+                    "Last name": lname,
+                    "Time": login_time,
+                    "Mask": mask_status,
+                    "Hat": hat_status,
+                    "Washing Complete": wash_status
+                }])
+
+            # THE FIX: Wrap the file writing in the Lock!
+                with EXCEL_LOCK:
+                    if os.path.exists(excel_file):
+                        df = pd.read_excel(excel_file)
+                        df = pd.concat([df, new_data], ignore_index=True)
+                        df.to_excel(excel_file, index=False)
+                    else:
+                        new_data.to_excel(excel_file, index=False)
+
+                print(f"[LOG] Session logged for {current_user}")
+                return True
+
+            except Exception as e:
+                print(f"[ERROR] Could not save to Excel: {e}")
+                return False
 
     def log_session(self, current_user, login_time, wash_status, mask_status, hat_status):
         """Log a user session to Excel file.
