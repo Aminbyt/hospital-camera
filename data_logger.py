@@ -157,21 +157,7 @@ class DataLogger:
 
     @staticmethod
     def clear_deepface_cache():
-        """Clear DeepFace model cache to force re-indexing.
-        
-        Returns:
-            bool: True if cache cleared
-        """
-        try:
-            cache_file = os.path.join(config.REG_PATH, "representations_vgg_face.pkl")
-            if os.path.exists(cache_file):
-                os.remove(cache_file)
-                print("[LOG] DeepFace cache cleared")
-                return True
-            return False
-        except Exception as e:
-            print(f"[WARNING] Could not clear cache: {e}")
-            return False
+        return True
 
 
 class UserSessionManager:

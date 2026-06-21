@@ -1,21 +1,26 @@
 """AI Detection Module - Handles YOLO, DeepFace, and MediaPipe models."""
-import torch
-import tensorflow
-import config
 import os
+import sys
 
-from ultralytics import YOLO
-from deepface import DeepFace
+# --- PYINSTALLER DLL SECURITY FIX ---
+if getattr(sys, 'frozen', False):
+    os.add_dll_directory(sys._MEIPASS)
+# ------------------------------------
 
 import cv2
+import torch
+import config
+import numpy as np
+from ultralytics import YOLO
 import math
-
 import mediapipe as mp
 from PyQt5.QtCore import QThread, pyqtSignal
 
+GLOBAL_RECOGNIZER = None
+GLOBAL_LABEL_MAP = {}
 
 class FaceRecognitionThread(QThread):
-    """Background thread for face recognition using DeepFace."""
+    """Background thread for pure OpenCV lightweight face recognition."""
     result_signal = pyqtSignal(str)
 
     def __init__(self, frame_to_check, db_path):
@@ -24,27 +29,68 @@ class FaceRecognitionThread(QThread):
         self.db_path = db_path
 
     def run(self):
-        """Execute face recognition in background."""
-        temp_img_path = "temp_check.jpg"
-        cv2.imwrite(temp_img_path, self.frame)
+        """Execute face recognition instantly using cached memory."""
+        global GLOBAL_RECOGNIZER, GLOBAL_LABEL_MAP
         try:
-            dfs = DeepFace.find(
-                img_path=temp_img_path, 
-                db_path=self.db_path, 
-                enforce_detection=True, 
-                silent=True
-            )
-            if len(dfs) > 0 and len(dfs[0]) > 0:
-                matched_image_path = dfs[0].iloc[0]['identity']
-                matched_name = os.path.basename(matched_image_path).split('.')[0]
-                self.result_signal.emit(matched_name)
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            gray_frame = cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray_frame, scaleFactor=1.1, minNeighbors=5)
+
+            if len(faces) == 0:
+                self.result_signal.emit("NO_FACE")
+                return
+
+            (x, y, w, h) = faces[0]
+            live_face_roi = gray_frame[y:y+h, x:x+w]
+
+            # --- THE FIX: ONLY TRAIN IF WE HAVEN'T TRAINED YET ---
+            if GLOBAL_RECOGNIZER is None:
+                print("[INFO] Training Face Database into memory...")
+                recognizer = cv2.face.LBPHFaceRecognizer_create()
+                faces_db = []
+                labels = []
+                label_map = {}
+                current_label = 0
+
+                for person_name in os.listdir(self.db_path):
+                    person_dir = os.path.join(self.db_path, person_name)
+                    if os.path.isdir(person_dir):
+                        label_map[current_label] = person_name
+                        has_images = False
+                        for img_name in os.listdir(person_dir):
+                            if img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
+                                img_path = os.path.join(person_dir, img_name)
+                                db_img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+                                if db_img is not None:
+                                    db_faces = face_cascade.detectMultiScale(db_img, 1.1, 5)
+                                    if len(db_faces) > 0:
+                                        (dx, dy, dw, dh) = db_faces[0]
+                                        faces_db.append(db_img[dy:dy+dh, dx:dx+dw])
+                                        labels.append(current_label)
+                                        has_images = True
+                        if has_images:
+                            current_label += 1
+
+                if len(faces_db) == 0:
+                    self.result_signal.emit("UNKNOWN")
+                    return
+
+                recognizer.train(faces_db, np.array(labels))
+                # Save it to global memory!
+                GLOBAL_RECOGNIZER = recognizer
+                GLOBAL_LABEL_MAP = label_map
+
+            # 4. Predict Identity Instantly using Memory!
+            label, confidence = GLOBAL_RECOGNIZER.predict(live_face_roi)
+
+            if confidence < 75:
+                self.result_signal.emit(GLOBAL_LABEL_MAP[label])
             else:
                 self.result_signal.emit("UNKNOWN")
-        except ValueError:
-            self.result_signal.emit("NO_FACE")
-        finally:
-            if os.path.exists(temp_img_path):
-                os.remove(temp_img_path)
+
+        except Exception as e:
+            print(f"[ERROR] Face Auth Error: {e}")
+            self.result_signal.emit("UNKNOWN")
 
 
 class AIModels:
@@ -70,30 +116,44 @@ class AIModels:
             min_detection_confidence=config.FACE_DETECTION_CONFIDENCE
         )
 
+        self.frame_counter = 0
+        self.last_yolo_boxes = []
+
     def detect_ppe(self, frame):
-        """Detect PPE (mask and hat) using YOLO.
-        
-        Args:
-            frame: Input frame from camera
-            
-        Returns:
-            tuple: (frame_with_annotations, has_mask, has_hat)
-        """
+        """Detect PPE using Frame Skipping for massive CPU speed boost."""
         has_mask = False
         has_hat = False
+        self.frame_counter += 1
 
-        results = self.yolo_model(frame, stream=True, conf=config.YOLO_CONF_THRESHOLD, verbose=False)
-        for r in results:
-            frame = r.plot()
-            for box in r.boxes:
-                class_name = self.yolo_model.names[int(box.cls[0])]
-                if class_name == 'mask':
-                    has_mask = True
-                elif class_name == 'hat':
-                    has_hat = True
+        # Only run the heavy AI inference every 3rd frame!
+        if self.frame_counter % 3 == 0 or not self.last_yolo_boxes:
+            results = self.yolo_model(frame, stream=True, conf=config.YOLO_CONF_THRESHOLD, verbose=False)
+            self.last_yolo_boxes = []
+            
+            for r in results:
+                for box in r.boxes:
+                    self.last_yolo_boxes.append({
+                        'xyxy': box.xyxy[0].cpu().numpy(),
+                        'cls': int(box.cls[0])
+                    })
+
+        # Draw the saved boxes instantly without stalling the CPU
+        for box_data in self.last_yolo_boxes:
+            class_id = box_data['cls']
+            class_name = self.yolo_model.names[class_id]
+            x1, y1, x2, y2 = map(int, box_data['xyxy'])
+            
+            # Draw box and text
+            color = (0, 255, 0) if class_name == 'mask' else (255, 0, 0)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, class_name.upper(), (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+            if class_name == 'mask':
+                has_mask = True
+            elif class_name == 'hat':
+                has_hat = True
 
         return frame, has_mask, has_hat
-
     def detect_face(self, frame_rgb):
         """Detect face presence using MediaPipe.
         

@@ -39,6 +39,7 @@ runs/
 *.mp4
 *.avi
 database/
+best_openvino_model/
 obj_train_data/
 images/
 labels/

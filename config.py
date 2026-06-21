@@ -11,7 +11,7 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 DB_PATH = "database"
 REG_PATH = os.path.join(DB_PATH, "REGISTER_PERSONS")
 INFO_PATH = os.path.join(DB_PATH, "INFORMATION")
-YOLO_MODEL_PATH = 'runs/detect/train/weights/best.pt'
+YOLO_MODEL_PATH = 'runs/detect/train/weights/best_openvino_model/'
 
 # Create necessary directories
 os.makedirs(REG_PATH, exist_ok=True)
@@ -25,12 +25,12 @@ HAND_TRACKING_CONFIDENCE = 0.4
 MAX_NUM_HANDS = 2
 
 # --- WASH TIMING (in seconds) ---
-MIN_WASH_TIME = 35
-MAX_WASH_TIME = 60
+MIN_WASH_TIME = 20
+MAX_WASH_TIME = 40
 
 # --- AUTHENTICATION PARAMETERS ---
-AUTH_COOLDOWN = 4.0  # seconds between auth attempts
-PRESENCE_TIMEOUT = 5.0  # seconds before auto-logout if no face detected
+AUTH_COOLDOWN = 5.0  # seconds between auth attempts
+PRESENCE_TIMEOUT = 10.0  # seconds before auto-logout if no face detected
 TOUCH_TIMEOUT = 2.5  # seconds to allow single hand washing in bubble zone
 
 # --- HAND GEOMETRY ---
@@ -64,3 +64,11 @@ BOT_TIMEOUT = 3  # seconds
 # --- WINDOW SETTINGS ---
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 700
+
+SINK_CAMERAS = {
+    "SINK_1": 0,
+    "SINK_2": 1,
+    "SINK_3": 2,
+    "SINK_4": 3,
+    "SINK_5": 4
+}

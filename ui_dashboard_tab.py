@@ -11,11 +11,15 @@ class DashboardTab(QWidget):
     
     # Signals for authentication
     auth_requested = pyqtSignal()
+    roi_requested = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self,sink_name = "CAMERA 1", parent=None):
         super().__init__(parent)
+        self.sink_name = sink_name
         self.parent_window = parent
+        self.last_frame =None
         self.build_ui()
+    
 
     def build_ui(self):
         """Build the dashboard UI."""
@@ -37,8 +41,8 @@ class DashboardTab(QWidget):
         main_layout.addWidget(right_panel, stretch=1)
 
         # Title
-        title = QLabel("PROTOCOL STATUS")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
+        title = QLabel(f"{self.sink_name} - PROTOCOL STATUS")
+        title.setFont(QFont("Arial" , 16, QFont.Bold))
         title.setAlignment(Qt.AlignLeft)
         right_layout.addWidget(title)
 
@@ -67,7 +71,14 @@ class DashboardTab(QWidget):
         self.btn_auth = QPushButton("STEP 1: SCAN FACE (REMOVE MASK)")
         self.btn_auth.clicked.connect(self.on_auth_clicked)
         right_layout.addWidget(self.btn_auth)
+
+        self.btn_roi = QPushButton("SET MANUAL SINL ZONE")
+        self.btn_roi.setStyleSheet ("padding: 10px; font-weight: bold; background: #e9ecef")
+        self.btn_roi.clicked.connect(self.roi_requested.emit)
+        right_layout.addWidget(self.btn_roi)
+
         right_layout.addSpacing(20)
+
 
         # PPE label
         self.ppe_label = QLabel("[ PPE VERIFICATION PENDING ]")
@@ -109,12 +120,15 @@ class DashboardTab(QWidget):
             "color: #000000; border: 2px solid #000000; padding: 20px; background: #ffffff;")
         right_layout.addWidget(self.master_status)
 
+ 
+
     def on_auth_clicked(self):
         """Handle authentication button click."""
         self.auth_requested.emit()
 
     def update_video(self, frame):
         """Update video display."""
+        self.last_frame = frame.copy()
         rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
@@ -176,3 +190,31 @@ class DashboardTab(QWidget):
         """Unlock dashboard (authenticated state)."""
         self.wash_label.setText("WASH TIMER: STANDBY")
         self.ppe_label.setText("[ PPE VERIFICATION PENDING ]")
+
+    def update_from_worker(self, data):
+        """Update all UI elements from the worker thread data."""
+        self.set_identity(data['user'], data['is_auth'])
+        self.set_auto_status(data['auth_msg'], data['auth_color'])
+
+        if not data['is_auth']:
+            self.lock_dashboard()
+            return
+           
+        self.unlock_dashboard()
+
+        # Update PPE Visuals
+        if not data['check_mask'] and not data['check_hat']:
+            self.set_ppe_status("", "", disabled=True)
+        else:
+            m_text = "VERIFIED ✅" if data['mask'] else "MISSING ❌"
+            h_text = "VERIFIED ✅" if data['hat'] else "MISSING ❌"
+            self.set_ppe_status(m_text, h_text)
+
+        # Update Wash Visuals
+        if not data['check_wash']:
+            self.set_wash_status("WASH TIMER:⏭️ DISABLED", config.MAX_WASH_TIME)
+        else:
+            self.set_wash_status(data['wash_status'], int(data['wash_time']))
+
+        # Update Final Ready State
+        self.set_master_status(data['master_ready'])
