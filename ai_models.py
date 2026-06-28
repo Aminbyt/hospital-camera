@@ -23,6 +23,12 @@ from PyQt5.QtCore import QThread, pyqtSignal
 GLOBAL_RECOGNIZER = None
 GLOBAL_LABEL_MAP = {}
 
+def reset_face_cache():
+    """Forces the AI to retrain its memory on the next scan."""
+    global GLOBAL_RECOGNIZER
+    GLOBAL_RECOGNIZER = None
+    print("[INFO] Face cache cleared! Will retrain on next scan.")
+
 class FaceRecognitionThread(QThread):
     """Background thread for pure OpenCV lightweight face recognition."""
     result_signal = pyqtSignal(str)
@@ -85,7 +91,7 @@ class FaceRecognitionThread(QThread):
             # Predict Identity Instantly from RAM
             label, confidence = GLOBAL_RECOGNIZER.predict(live_face_roi)
 
-            if confidence < 75:
+            if confidence < 115:
                 self.result_signal.emit(GLOBAL_LABEL_MAP[label])
             else:
                 self.result_signal.emit("UNKNOWN")
@@ -156,16 +162,49 @@ class AIModels:
 
         return frame, has_mask, has_hat
     def detect_face(self, frame_rgb):
-        """Detect face presence using MediaPipe.
-        
-        Args:
-            frame_rgb: RGB color space frame
-            
-        Returns:
-            bool: True if face detected
-        """
+        """Detect face presence using MediaPipe with strict 'Looking at Camera' filters."""
         face_results = self.face_detector.process(frame_rgb)
-        return bool(face_results.detections)
+       
+        if not face_results.detections:
+            return False
+
+        for detection in face_results.detections:
+            bboxC = detection.location_data.relative_bounding_box
+           
+            # 1. THE PROXIMITY RULE: Ignore people far away in the background
+            # Face width must take up at least 12% of the frame
+            if bboxC.width < 0.12:
+                continue
+
+            # 2. THE CENTER RULE: Ignore people walking past the extreme edges
+            face_center_x = bboxC.xmin + (bboxC.width / 2)
+            if face_center_x < 0.20 or face_center_x > 0.80:
+                continue
+               
+            # 3. THE "LOOK AT ME" RULE: Check if the head is turned sideways
+            # MediaPipe Keypoints: 0=Right Eye, 1=Left Eye, 2=Nose
+            keypoints = detection.location_data.relative_keypoints
+            right_eye = keypoints[0]
+            left_eye = keypoints[1]
+            nose = keypoints[2]
+
+            # Measure the horizontal distance from the nose to each eye
+            dist_right = abs(nose.x - right_eye.x)
+            dist_left = abs(left_eye.x - nose.x)
+
+            # Avoid division by zero
+            if dist_left == 0 or dist_right == 0:
+                continue
+               
+            # If the head is turned sideways (profile), one eye is geometrically closer to the nose outline.
+            # A perfect forward-facing head has a ratio of exactly 1.0.
+            # We allow 0.5 to 2.0 to account for slight natural head tilts.
+            ratio = dist_right / dist_left
+            if 0.5 < ratio < 2.0:
+                return True # The user is close, centered, and intentionally looking at the camera!
+
+        return False
+
 
     def detect_hands(self, frame_rgb):
         """Detect hands using MediaPipe.

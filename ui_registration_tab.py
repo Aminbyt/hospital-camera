@@ -10,6 +10,7 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QFont, QImage, QPixmap
 import config
 from data_logger import DataLogger
+from ai_models import reset_face_cache
 
 
 class RegistrationTab(QWidget):
@@ -181,7 +182,7 @@ class RegistrationTab(QWidget):
         cv2.imwrite(img_path, self.last_clean_frame)
 
         # Clear cache
-        self.data_logger.clear_deepface_cache()
+        reset_face_cache()
 
         QMessageBox.information(self, "SUCCESS", 
                               f"Profile for {full_name} ({gender}) saved successfully!")

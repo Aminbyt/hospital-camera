@@ -15,7 +15,7 @@ from ui_home_tab import HomeSummaryTab
 from ui_dashboard_tab import DashboardTab
 from ui_registration_tab import RegistrationTab
 from ui_settings_tab import SettingsTab
-from camrea_worker import CameraWorker
+from camrea_worker import CameraWorker 
 from sink_calibration import SinkCalibration , create_roi_dialog
 
 class ScrubSinkKiosk(QMainWindow):

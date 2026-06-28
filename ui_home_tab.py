@@ -68,6 +68,7 @@ class HomeSummaryTab(QWidget):
         line.setStyleSheet("background-color: #dee2e6; border: none;")
         layout.addWidget(line)
         layout.addSpacing(5)
+        
 
         # User Info
         lbl_user = QLabel("USER: EMPTY")

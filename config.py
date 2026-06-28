@@ -6,7 +6,7 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
-
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer"
 # --- PATHS ---
 DB_PATH = "database"
 REG_PATH = os.path.join(DB_PATH, "REGISTER_PERSONS")
@@ -29,8 +29,8 @@ MIN_WASH_TIME = 20
 MAX_WASH_TIME = 40
 
 # --- AUTHENTICATION PARAMETERS ---
-AUTH_COOLDOWN = 5.0  # seconds between auth attempts
-PRESENCE_TIMEOUT = 10.0  # seconds before auto-logout if no face detected
+AUTH_COOLDOWN = 2.0  # seconds between auth attempts
+PRESENCE_TIMEOUT = 15.0  # seconds before auto-logout if no face detected
 TOUCH_TIMEOUT = 2.5  # seconds to allow single hand washing in bubble zone
 
 # --- HAND GEOMETRY ---
@@ -65,10 +65,12 @@ BOT_TIMEOUT = 3  # seconds
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 700
 
+# --- CAMERA HARDWARE MAPPING ---
+# Dahua RTSP Format: rtsp://username:password@IP_Address:554/cam/realmonitor?channel=1&subtype=1
 SINK_CAMERAS = {
-    "SINK_1": 0,
-    "SINK_2": 1,
-    "SINK_3": 2,
-    "SINK_4": 3,
-    "SINK_5": 4
+    "SINK_1": "rtsp://admin:1937@asdF@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1"
+   # "SINK_2": "rtsp://admin:YourCameraPassword123@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1",
+   # "SINK_3": "rtsp://admin:YourCameraPassword123@192.168.1.103:554/cam/realmonitor?channel=1&subtype=1",
+   # "SINK_4": "rtsp://admin:YourCameraPassword123@192.168.1.104:554/cam/realmonitor?channel=1&subtype=1",
+    #"SINK_5": "rtsp://admin:YourCameraPassword123@192.168.1.105:554/cam/realmonitor?channel=1&subtype=1"
 }
