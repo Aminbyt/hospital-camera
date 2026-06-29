@@ -30,7 +30,7 @@ MAX_WASH_TIME = 40
 
 # --- AUTHENTICATION PARAMETERS ---
 AUTH_COOLDOWN = 2.0  # seconds between auth attempts
-PRESENCE_TIMEOUT = 15.0  # seconds before auto-logout if no face detected
+PRESENCE_TIMEOUT = 6.0  # seconds before auto-logout if no face detected
 TOUCH_TIMEOUT = 2.5  # seconds to allow single hand washing in bubble zone
 
 # --- HAND GEOMETRY ---
@@ -68,9 +68,9 @@ WINDOW_HEIGHT = 700
 # --- CAMERA HARDWARE MAPPING ---
 # Dahua RTSP Format: rtsp://username:password@IP_Address:554/cam/realmonitor?channel=1&subtype=1
 SINK_CAMERAS = {
-    "SINK_1": "rtsp://admin:1937@asdF@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1"
-   # "SINK_2": "rtsp://admin:YourCameraPassword123@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1",
-   # "SINK_3": "rtsp://admin:YourCameraPassword123@192.168.1.103:554/cam/realmonitor?channel=1&subtype=1",
-   # "SINK_4": "rtsp://admin:YourCameraPassword123@192.168.1.104:554/cam/realmonitor?channel=1&subtype=1",
-    #"SINK_5": "rtsp://admin:YourCameraPassword123@192.168.1.105:554/cam/realmonitor?channel=1&subtype=1"
+    "SINK_1": "rtsp://admin:1937@asdF@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1",
+    "SINK_2": "rtsp://admin:1937@asdF@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1",
+    "SINK_3": "rtsp://admin:1937@asdF@192.168.1.103:554/cam/realmonitor?channel=1&subtype=1",
+    "SINK_4": "rtsp://admin:1937@asdF@192.168.1.104:554/cam/realmonitor?channel=1&subtype=1",
+    "SINK_5": "rtsp://admin:1937@asdF@192.168.1.105:554/cam/realmonitor?channel=1&subtype=1"
 }

@@ -111,7 +111,7 @@ class ScrubSinkKiosk(QMainWindow):
             if sink_id == "SINK_1":
                 worker.frame_ready.connect(self.page_cam1.update_video)
                 worker.dashboard_data.connect(self.page_cam1.update_from_worker)
-                worker.frame_ready.connect(self.page_reg.set_frame)
+                worker.raw_frame_ready.connect(self.page_reg.set_frame)
                 # Connect the drawing button!
                 self.page_cam1.roi_requested.connect(lambda w=worker, p=self.page_cam1: self.open_roi_dialog(w, p))
                

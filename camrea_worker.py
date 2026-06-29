@@ -45,6 +45,7 @@ class RTSPGrabber:
 class CameraWorker(QThread):
     # Signals to send data back to the UI safely
     frame_ready = pyqtSignal(object)   
+    raw_frame_ready = pyqtSignal(object)
     data_ready = pyqtSignal(str, dict) 
     dashboard_data = pyqtSignal(dict)  
 
@@ -93,6 +94,8 @@ class CameraWorker(QThread):
                 time.sleep(0.01)
                 continue
 
+            self.raw_frame_ready.emit(frame.copy())
+
             frame_h, frame_w = frame.shape[:2]
             clean_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -122,28 +125,40 @@ class CameraWorker(QThread):
                     self.auth_message = "WAITING FOR FACE..."
                     self.auth_color = "normal"
 
-            # 2. SINK CALIBRATION
-            if self.scrub_roi:
-                self.sink_y_start = int(self.scrub_roi[1] * frame_h)
-                frame = SinkCalibration.draw_manual_roi(frame, self.scrub_roi)
-            else:
-                if self.sink_y_start is None:
-                    detected_y = SinkCalibration.auto_detect_sink_line(frame)
-                    self.sink_y_start = SinkCalibration.calculate_sink_y_start(detected_y, frame_h)
-
-            # 3. PPE DETECTION
+            # 2. ALCOHOL SCRUB ZONE (SPLIT SCREEN 50/50)
+            # ---------------------------------------------------------
+            # Force the valid washing zone to always be exactly halfway down the screen
+            self.sink_y_start = int(frame_h * 0.5)
+           
+            # Draw a solid red line across the middle so users know where to scrub
+            cv2.line(frame, (0, self.sink_y_start), (frame_w, self.sink_y_start), (0, 0, 255), 2)
+            cv2.putText(frame, "ALCOHOL SCRUB ZONE", (10, self.sink_y_start - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+# ---------------------------------------------------------
+            # 3. & 4. HEAVY AI (PPE & WASH) - THE "WAKE UP" CHECK
+            # ---------------------------------------------------------
             has_mask, has_hat = False, False
-            if self.check_mask or self.check_hat:
-                frame, has_mask, has_hat = self.ai_models.detect_ppe(frame)
+           
+            # THE MAGIC GATEKEEPER: Only run heavy YOLO math if someone looked at the camera and logged in!
+            if self.session_manager.is_authenticated():
+               
+                # 3. PPE DETECTION
+                if self.check_mask or self.check_hat:
+                    frame, has_mask, has_hat = self.ai_models.detect_ppe(frame)
 
-            # 4. HAND WASHING
-            if self.check_wash and hand_results['detected']:
-                frame = self.ai_models.draw_hand_landmarks(frame, hand_results['hand_results'])
-                wash_info = self.wash_detector.detect_washing(
-                    hand_results, frame_w, frame_h, self.sink_y_start, self.ai_models
-                )
-                self.wash_detector.update_wash_time(wash_info['actively_washing'])
-                frame = self.wash_detector.draw_bubble_zone(frame)
+                # 4. HAND WASHING
+                if self.check_wash and hand_results['detected']:
+                    frame = self.ai_models.draw_hand_landmarks(frame, hand_results['hand_results'])
+                    wash_info = self.wash_detector.detect_washing(
+                        hand_results, frame_w, frame_h, self.sink_y_start, self.ai_models
+                    )
+                    self.wash_detector.update_wash_time(wash_info['actively_washing'])
+                    frame = self.wash_detector.draw_bubble_zone(frame)
+           
+            else:
+                # If the person just walks by and no one is logged in, ensure the timer stays at 0
+                self.wash_detector.reset_state()
+            # ---------------------------------------------------------
 
             # 5. DETERMINE MASTER STATUS
             master_ready = False

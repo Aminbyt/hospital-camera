@@ -1,7 +1,9 @@
+""" We are not using this file you can delete but we keep it for our history work """
 import cv2
 import time
 import mediapipe as mp
 from ultralytics import YOLO
+
 
 # 1. Load YOLOv8 (Offline PPE AI)
 MODEL_PATH = 'runs/detect/train/weights/best.pt'
