@@ -159,38 +159,55 @@ class RegistrationTab(QWidget):
     def update_countdown(self):
         """Update countdown display."""
         self.countdown_val -= 1
-        
+       
         if self.countdown_val > 0:
             self.capture_btn.setText(f"TAKING PICTURE IN {self.countdown_val}...")
         else:
             self.countdown_timer.stop()
             self.capture_btn.setText("PROCESSING...")
+            # This now correctly calls our updated multi-angle saving method below!
             self.register_new_user()
 
     def register_new_user(self):
-        """Register new user with captured face."""
-        fname = self.reg_fname.text().strip()
-        lname = self.reg_lname.text().strip()
-        gender = "MALE" if self.radio_male.isChecked() else "FEMALE"
-        full_name = f"{fname}_{lname}"
+        """Captures the current clean frame and appends it as a new angle in the user's folder."""
+        fname = self.reg_fname.text().strip().upper()
+        lname = self.reg_lname.text().strip().upper()
+       
+        if not fname or not lname or self.last_clean_frame is None:
+            QMessageBox.warning(self, "ERROR", "Missing name or camera frame!")
+            self.capture_btn.setText("LOOK AT CAMERA & START TIMER")
+            self.capture_btn.setEnabled(True)
+            return
 
-        # Save face image
-        person_folder = os.path.join(config.REG_PATH, full_name)
-        os.makedirs(person_folder, exist_ok=True)
+        # 1. Format folder path using First_Last convention
+        full_name = f"{fname} {lname}"
+        clean_folder_name = f"{fname}_{lname}"
+        user_dir = os.path.join(config.REG_PATH, clean_folder_name)
+        os.makedirs(user_dir, exist_ok=True)
 
-        img_path = os.path.join(person_folder, f"{full_name}.jpg")
-        cv2.imwrite(img_path, self.last_clean_frame)
+        # 2. COUNT EXISTING PHOTOS to prevent overwriting and enable sequential angles
+        existing_photos = [f for f in os.listdir(user_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+        next_angle_num = len(existing_photos) + 1
 
-        # Clear cache
+        # 3. Save with a sequential file name (angle_1.jpg, angle_2.jpg, etc.)
+        file_name = f"angle_{next_angle_num}.jpg"
+        save_path = os.path.join(user_dir, file_name)
+
+        # Save the clean untouched frame captured before AI drawing overlays
+        cv2.imwrite(save_path, self.last_clean_frame)
+
+        # 4. Reset the AI memory so it instantly loads and learns the new angle!
         reset_face_cache()
 
-        QMessageBox.information(self, "SUCCESS", 
-                              f"Profile for {full_name} ({gender}) saved successfully!")
-
-        # Reset form
-        self.reg_fname.clear()
-        self.reg_lname.clear()
-        self.reg_role.clear()
-        self.radio_male.setChecked(True)
+        # 5. Reset UI & give confirmation
         self.capture_btn.setText("LOOK AT CAMERA & START TIMER")
         self.capture_btn.setEnabled(True)
+       
+        QMessageBox.information(
+            self,
+            "SUCCESS",
+            f"Saved {file_name} for {full_name}!\nTotal reference angles stored: {next_angle_num}"
+        )
+        print(f"[REGISTRATION] Saved angle #{next_angle_num} for {full_name} to {save_path}")
+
+

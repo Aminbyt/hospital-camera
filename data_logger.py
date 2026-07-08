@@ -22,44 +22,67 @@ class DataLogger:
         os.makedirs(config.INFO_PATH, exist_ok=True)
 
     def log_session(self, current_user, login_time, wash_status, mask_status, hat_status):
-        """Log a user session to Excel file safely using a thread lock."""
+        """Log a user session to a daily Excel file inside that specific person's registration folder."""
         if not current_user:
             return False
 
         try:
             date_str = time.strftime("%Y-%m-%d")
-            excel_file = os.path.join(config.INFO_PATH, f"{date_str}.xlsx")
+
+            # 1. Locate the person's exact folder inside REG_PATH
+            # We check both underscore and space formats to guarantee we find their photo folder
+            folder_underscores = os.path.join(config.REG_PATH, current_user.replace(" ", "_"))
+            folder_spaces = os.path.join(config.REG_PATH, current_user)
+
+            if os.path.exists(folder_underscores):
+                person_dir = folder_underscores
+            elif os.path.exists(folder_spaces):
+                person_dir = folder_spaces
+            else:
+                # Fallback: if folder is missing for some reason, create it cleanly
+                person_dir = folder_underscores
+                os.makedirs(person_dir, exist_ok=True)
+
+            # 2. Set the Excel file path directly inside their personal folder
+            excel_file = os.path.join(person_dir, f"{date_str}.xlsx")
 
             parts = current_user.split(" ")
             fname = parts[0] if len(parts) > 0 else "UNKNOWN"
             lname = parts[1] if len(parts) > 1 else ""
 
-            new_data = pd.DataFrame([{
-                "Date": date_str,
-                "Name": fname,
-                "Last name": lname,
-                "Time": login_time,
-                "Mask": mask_status,
-                "Hat": hat_status,
-                "Washing Complete": wash_status
-            }])
-
-            # --- THE FIXED LOCK ---
+            # 3. Thread-safe read/write using your global lock
             with EXCEL_LOCK:
                 if os.path.exists(excel_file):
                     df = pd.read_excel(excel_file)
-                    df = pd.concat([df, new_data], ignore_index=True)
-                    df.to_excel(excel_file, index=False)
+                    visit_count = len(df) + 1  # Increment visit count for today
                 else:
-                    new_data.to_excel(excel_file, index=False)
+                    df = pd.DataFrame()
+                    visit_count = 1            # First visit of the day!
 
-            print(f"[LOG] Session logged for {current_user}")
+                new_data = pd.DataFrame([{
+                    "Visit #": visit_count,
+                    "Date": date_str,
+                    "Name": fname,
+                    "Last name": lname,
+                    "Time": login_time,
+                    "Mask": mask_status,
+                    "Hat": hat_status,
+                    "Washing Complete": wash_status
+                }])
+
+                if not df.empty:
+                    df = pd.concat([df, new_data], ignore_index=True)
+                else:
+                    df = new_data
+
+                df.to_excel(excel_file, index=False)
+
+            print(f"[LOG] Saved Visit #{visit_count} for {current_user} in {excel_file}")
             return True
 
         except Exception as e:
-            print(f"[ERROR] Could not save to Excel: {e}")
+            print(f"[ERROR] Could not save to personal Excel: {e}")
             return False
-
     @staticmethod
     def send_bot_notification(current_user, login_time, wash_status, mask_status, hat_status):
         try:
