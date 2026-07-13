@@ -8,6 +8,7 @@ from ai_models import AIModels, FaceRecognitionThread
 from hand_wash_detector import HandWashDetector
 from sink_calibration import SinkCalibration
 from data_logger import DataLogger, UserSessionManager
+from video_recorder import VideoRecorder
 
 class RTSPGrabber:
     """A dedicated high-speed thread that constantly clears the network buffer."""
@@ -54,11 +55,14 @@ class CameraWorker(QThread):
         self.sink_name = sink_name
         self.camera_index = camera_index
         self.running = True
+        self.auth_color = "normal"
+        self.video_stream = None
 
         self.ai_models = AIModels()
         self.wash_detector = HandWashDetector()
         self.session_manager = UserSessionManager()
         self.data_logger = DataLogger()
+        self.recorder = VideoRecorder(self.sink_name)
 
         self.sink_y_start = None
         self.scrub_roi = None
@@ -95,6 +99,8 @@ class CameraWorker(QThread):
                 continue
 
             self.raw_frame_ready.emit(frame.copy())
+
+            clean_record_frame = frame.copy()
 
             frame_h, frame_w = frame.shape[:2]
             clean_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -168,6 +174,10 @@ class CameraWorker(QThread):
                 if self.check_hat and not has_hat: master_ready = False
                 if self.check_wash and self.wash_detector.current_wash_time < config.MIN_WASH_TIME: master_ready = False
 
+            if self.session_manager.is_authenticated():
+                if not self.recorder.is_recording:
+                    self.recorder.start_recording(self.session_manager.current_user , frame_w , frame_h)
+                self.recorder.add_frame(clean_record_frame)
             # 6. SEND DATA BACK TO UI
             summary_data = {
                 'user': self.session_manager.current_user if self.session_manager.current_user else "EMPTY",
@@ -221,6 +231,9 @@ class CameraWorker(QThread):
             self.session_manager.update_presence()
 
     def logout_user(self):
+        if self.recorder.is_recording:
+            self.recorder.stop_recording()
+
         if self.session_manager.is_authenticated():
             wash_status = "YES" if self.wash_detector.current_wash_time >= config.MIN_WASH_TIME else "NO"
             mask_status = "YES" if (self.session_manager.last_person_seen_time - self.wash_detector.last_mask_seen_time) <= 3.0 else "NO"
@@ -249,4 +262,7 @@ class CameraWorker(QThread):
 
     def stop(self):
         self.running = False
+
+        if self.recorder.is_recording:
+            self.recorder.stop_recording()
         self.wait()
