@@ -4,7 +4,7 @@ import time
 import math
 import cv2
 import config
-
+import logging
 class HandWashDetector:
     def __init__(self):
         self.reset_state()

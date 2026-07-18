@@ -1,5 +1,5 @@
 """Dashboard Tab UI Module - Main system dashboard with protocol status."""
-
+import os
 import cv2
 from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QProgressBar
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -93,19 +93,67 @@ class DashboardTab(QWidget):
 
         right_layout.addWidget(self.wash_label)
 
-        # Progress bar
+# Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximum(config.MAX_WASH_TIME)
         self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True) 
-        self.progress_bar.setFormat("%v SECONDS") 
-        self.progress_bar.setAlignment(Qt.AlignCenter) 
-        self.progress_bar.setStyleSheet(""" 
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%v SECONDS")
+        self.progress_bar.setAlignment(Qt.AlignCenter)
+        self.progress_bar.setStyleSheet("""
                 QProgressBar { border: 2px solid #000000;
                 background: #ffffff; height: 30px; text-align: center;
-                font-weight: bold; color: #000000; font-size: 14px; } 
+                font-weight: bold; color: #000000; font-size: 14px; }
                 QProgressBar::chunk { background-color: #1b4332; }""")
         right_layout.addWidget(self.progress_bar)
+
+        # --- NEW: AKAM HEALTH LOGO ---
+        right_layout.addSpacing(20)
+        self.logo_label = QLabel()
+        self.logo_label.setAlignment(Qt.AlignCenter)
+       
+        # 1. Gather ALL possible directories where the image might be sitting!
+        import sys
+        search_dirs = [
+            os.path.dirname(os.path.abspath(__file__)), # Default script folder
+            os.getcwd()                                 # Current working directory
+        ]
+        if getattr(sys, 'frozen', False):
+            search_dirs.append(os.path.dirname(sys.executable)) # Right next to the .exe file!
+            search_dirs.append(sys._MEIPASS)                    # Inside PyInstaller's _internal folder
+       
+        # 2. Check a list of possible filenames
+        possible_names = [
+            "Akam Health Logo 1.jpg",
+            "akam_logo.jpg",
+            "Akam Health Logo 1.png",
+            "akam_logo.png"
+        ]
+       
+        found_logo_path = None
+        for folder in search_dirs:
+            for name in possible_names:
+                full_path = os.path.join(folder, name)
+                if os.path.exists(full_path):
+                    found_logo_path = full_path
+                    break
+            if found_logo_path:
+                break
+
+        # 3. Load the image if found, otherwise fall back to text
+        if found_logo_path:
+            print(f"[UI] Successfully loaded logo from: {found_logo_path}")
+            logo_pixmap = QPixmap(found_logo_path)
+            scaled_logo = logo_pixmap.scaledToHeight(180, Qt.SmoothTransformation)
+            self.logo_label.setPixmap(scaled_logo)
+        else:
+            print("[UI WARNING] Could not find logo file! Displaying text fallback.")
+            self.logo_label.setText("AKAM HEALTH")
+            self.logo_label.setFont(QFont("Arial", 16, QFont.Bold))
+            self.logo_label.setStyleSheet("color: #1b4332;")
+           
+        right_layout.addWidget(self.logo_label)
+        # -----------------------------
 
         right_layout.addStretch()
 

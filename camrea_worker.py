@@ -3,8 +3,9 @@ import cv2
 import time
 import threading
 from PyQt5.QtCore import QThread, pyqtSignal
+import logging
 import config
-from ai_models import AIModels, FaceRecognitionThread
+from ai_models import AIModels, FaceRecognitionThread, recognize_face_sync
 from hand_wash_detector import HandWashDetector
 from sink_calibration import SinkCalibration
 from data_logger import DataLogger, UserSessionManager
@@ -69,6 +70,7 @@ class CameraWorker(QThread):
         self.check_mask = True
         self.check_hat = True
         self.check_wash = True
+        self.check_record = True
 
         self.auth_check_counter = 0
         self.auth_message = "WAITING FOR FACE..."
@@ -84,7 +86,7 @@ class CameraWorker(QThread):
             self.video_stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             is_rtsp = False
         else:
-            print(f"[INFO] Connecting to IP Camera: {self.sink_name} with Zero-Latency Grabber...")
+            logging.info(f"[INFO] Connecting to IP Camera: {self.sink_name} with Zero-Latency Grabber...")
             self.video_stream = RTSPGrabber(self.camera_index).start()
             is_rtsp = True
 
@@ -105,7 +107,7 @@ class CameraWorker(QThread):
             frame_h, frame_w = frame.shape[:2]
             clean_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            # --- THE FIX: PRE-CALCULATE HANDS TO PROVE PRESENCE ---
+            # --- PRE-CALCULATE HANDS TO PROVE PRESENCE ---
             hand_results = self.ai_models.detect_hands(clean_rgb)
             has_any_face = self.ai_models.detect_face(clean_rgb)
 
@@ -121,9 +123,10 @@ class CameraWorker(QThread):
                         self.session_manager.is_authenticating = True
                         self.auth_message = "SCANNING FACE..."
                         self.auth_color = "warning"
-                        self.face_thread = FaceRecognitionThread(frame.copy(), config.REG_PATH)
-                        self.face_thread.result_signal.connect(self.handle_auth_result)
-                        self.face_thread.start()
+                       
+                        # CALL SYNCHRONOUSLY WITH THREAD LOCK
+                        auth_result = recognize_face_sync(frame.copy(), config.REG_PATH)
+                        self.handle_auth_result(auth_result)
             else:
                 self.auth_check_counter = 0
                 if self.session_manager.check_presence_timeout():
@@ -133,14 +136,12 @@ class CameraWorker(QThread):
 
             # 2. ALCOHOL SCRUB ZONE (SPLIT SCREEN 50/50)
             # ---------------------------------------------------------
-            # Force the valid washing zone to always be exactly halfway down the screen
             self.sink_y_start = int(frame_h * 0.5)
-           
-            # Draw a solid red line across the middle so users know where to scrub
             cv2.line(frame, (0, self.sink_y_start), (frame_w, self.sink_y_start), (0, 0, 255), 2)
             cv2.putText(frame, "ALCOHOL SCRUB ZONE", (10, self.sink_y_start - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-# ---------------------------------------------------------
+            # ---------------------------------------------------------
+
             # 3. & 4. HEAVY AI (PPE & WASH) - THE "WAKE UP" CHECK
             # ---------------------------------------------------------
             has_mask, has_hat = False, False
@@ -160,10 +161,36 @@ class CameraWorker(QThread):
                     )
                     self.wash_detector.update_wash_time(wash_info['actively_washing'])
                     frame = self.wash_detector.draw_bubble_zone(frame)
+                    
+                    # ---> DISPLAY LIVE WHO GESTURE <---
+                    if wash_info['actively_washing']:
+                        current_who_step = self.ai_models.predict_who_step(hand_results['hand_results'])
+
+                        step_labels = {
+                            0: "Scrubbing / Transitioning",
+                            1: "Step 1: Palm to Palm",
+                            2: "Step 2: Right over Left Dorsum",
+                            3: "Step 3: Palm to Palm Interlaced",
+                            4: "Step 4: Backs of Fingers",
+                            5: "Step 5: Thumb Rotation",
+                            6: "Step 6: Fingertips"
+                        }
+                        label_text = step_labels.get(current_who_step, "Detecting...")
+
+                        # Draw a clean dark green background banner for text readability
+                        cv2.rectangle(frame, (20, 30), (460, 80), (27, 67, 50), -1)  # Dark green fill
+                        cv2.rectangle(frame, (20, 30), (460, 80), (0, 255, 0), 2)    # Bright green border
+                        cv2.putText(frame, label_text, (35, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+                    else:
+                        # Clear smoothing buffer when hands pause or leave the active wash zone
+                        self.ai_models.clear_buffer()
+                else:
+                    # Clear smoothing buffer when no hands are detected
+                    self.ai_models.clear_buffer()
            
             else:
-                # If the person just walks by and no one is logged in, ensure the timer stays at 0
                 self.wash_detector.reset_state()
+                self.ai_models.clear_buffer()
             # ---------------------------------------------------------
 
             # 5. DETERMINE MASTER STATUS
@@ -174,10 +201,11 @@ class CameraWorker(QThread):
                 if self.check_hat and not has_hat: master_ready = False
                 if self.check_wash and self.wash_detector.current_wash_time < config.MIN_WASH_TIME: master_ready = False
 
-            if self.session_manager.is_authenticated():
+            if self.session_manager.is_authenticated() and self.check_record:
                 if not self.recorder.is_recording:
-                    self.recorder.start_recording(self.session_manager.current_user , frame_w , frame_h)
+                    self.recorder.start_recording(self.session_manager.current_user, frame_w, frame_h)
                 self.recorder.add_frame(clean_record_frame)
+
             # 6. SEND DATA BACK TO UI
             summary_data = {
                 'user': self.session_manager.current_user if self.session_manager.current_user else "EMPTY",
@@ -221,7 +249,7 @@ class CameraWorker(QThread):
             self.auth_message = f"{clean_result} LOGGED IN"
             self.auth_color = "success"
         elif self.session_manager.current_user != clean_result:
-            print(f"[{self.sink_name} SWAP DETECTED] {self.session_manager.current_user} left, {clean_result} stepped in!")
+            logging.info(f"[{self.sink_name} SWAP DETECTED] {self.session_manager.current_user} left, {clean_result} stepped in!")
             self.logout_user()
             self.session_manager.set_user(clean_result)
             self.wash_detector.reset_state()
@@ -246,11 +274,17 @@ class CameraWorker(QThread):
             )
         self.session_manager.clear_user()
         self.wash_detector.reset_state()
+        self.ai_models.clear_buffer()  # <-- Clean reset of the smoothing buffer on logout!
 
-    def update_toggles(self, mask, hat, wash):
+    def update_toggles(self, mask, hat, wash, record=True):
         self.check_mask = mask
         self.check_hat = hat
         self.check_wash = wash
+        self.check_record = record
+
+        if not self.check_record and self.recorder.is_recording:
+            self.recorder.stop_recording()
+            logging.info(f"[{self.sink_name}] recording stopped by setting toggle")
     
     def set_manual_roi(self, roi):
         self.scrub_roi = roi

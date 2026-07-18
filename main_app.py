@@ -1,8 +1,73 @@
 """Main Application - Hospital AI Smart Scrub Sink Kiosk."""
 import sys
 import os
+
+# --- 1. SET CRITICAL ENVIRONMENT VARIABLES BEFORE ANY IMPORTS ---
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['OMP_NUM_THREADS'] = '2'  # Prevents CPU thread starvation!
+
+# --- 2. REGISTER DLL PATHS FOR PYINSTALLER ---
 if getattr(sys, 'frozen', False):
-    os.add_dll_directory(sys._MEIPASS)
+    base_dir = sys._MEIPASS
+    torch_lib_dir = os.path.join(base_dir, 'torch', 'lib')
+    mediapipe_dir = os.path.join(base_dir, 'mediapipe')
+    onnx_dir = os.path.join(base_dir, 'onnxruntime', 'capi')
+   
+    # A. Register DLL directories with Windows
+    if hasattr(os, 'add_dll_directory'):
+        os.add_dll_directory(base_dir)
+        if os.path.exists(torch_lib_dir):
+            os.add_dll_directory(torch_lib_dir)
+        if os.path.exists(mediapipe_dir):
+            os.add_dll_directory(mediapipe_dir)
+        if os.path.exists(onnx_dir):
+            os.add_dll_directory(onnx_dir)
+           
+    # B. Force-inject into Windows PATH for legacy C++ sub-dependencies
+    os.environ['PATH'] = f"{base_dir};{torch_lib_dir};{mediapipe_dir};{onnx_dir};" + os.environ.get('PATH', '')
+   
+    # C. UPGRADED DLL LOADER: Pre-loads both PyTorch AND ONNX Runtime DLLs!
+    import ctypes
+    import glob
+    target_dlls = glob.glob(os.path.join(torch_lib_dir, "*.dll")) + glob.glob(os.path.join(onnx_dir, "*.dll"))
+    loaded_dlls = set()
+    for pass_num in range(1, 4):
+        for dll_path in target_dlls:
+            if dll_path not in loaded_dlls:
+                try:
+                    ctypes.CDLL(dll_path)
+                    loaded_dlls.add(dll_path)
+                except Exception:
+                    pass
+    print(f"[BOOT SUCCESS] Pre-loaded {len(loaded_dlls)} PyTorch & ONNX Runtime DLLs into memory!")
+# ---------------------------------------------
+
+# --- 3. CRITICAL IMPORT ORDER: MEDIAPIPE, ONNXRUNTIME & INSIGHTFACE FIRST ---
+try:
+    import mediapipe as mp
+    print("[BOOT SUCCESS] MediaPipe C++ framework bindings initialized cleanly!")
+except Exception as e:
+    print(f"[BOOT WARNING] MediaPipe early import note: {e}")
+
+try:
+    import onnxruntime
+    import insightface
+    print("[BOOT SUCCESS] ONNX Runtime & InsightFace C++ engines initialized cleanly!")
+except Exception as e:
+    print(f"[BOOT WARNING] ONNX/InsightFace early import note: {e}")
+
+import torch
+# ----------------------------------------------------------------------------
+
+# --- 4. INITIALIZE MASTER LOGGER ---
+try:
+    from logger_setup import setup_system_logger
+    logger = setup_system_logger()
+except ImportError:
+    pass
+# -----------------------------------
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
@@ -15,8 +80,8 @@ from ui_home_tab import HomeSummaryTab
 from ui_dashboard_tab import DashboardTab
 from ui_registration_tab import RegistrationTab
 from ui_settings_tab import SettingsTab
-from camrea_worker import CameraWorker 
-from sink_calibration import SinkCalibration , create_roi_dialog
+from camrea_worker import CameraWorker
+from sink_calibration import SinkCalibration, create_roi_dialog
 
 class ScrubSinkKiosk(QMainWindow):
     """Master Control Center."""
@@ -107,18 +172,18 @@ class ScrubSinkKiosk(QMainWindow):
         for sink_id, cam_index in config.SINK_CAMERAS.items():
             worker = CameraWorker(sink_name=sink_id, camera_index=cam_index)
            
-            # 1. Route the video frame AND UI data to the correct Dashboard Tabs
+
+            worker.raw_frame_ready.connect(lambda frame, s=sink_id: self.page_reg.set_frame(s, frame))
+
+            # 2. Route the video frame AND UI data to the correct Dashboard Tabs
             if sink_id == "SINK_1":
                 worker.frame_ready.connect(self.page_cam1.update_video)
                 worker.dashboard_data.connect(self.page_cam1.update_from_worker)
-                worker.raw_frame_ready.connect(self.page_reg.set_frame)
-                # Connect the drawing button!
                 self.page_cam1.roi_requested.connect(lambda w=worker, p=self.page_cam1: self.open_roi_dialog(w, p))
                
             elif sink_id == "SINK_2":
                 worker.frame_ready.connect(self.page_cam2.update_video)
                 worker.dashboard_data.connect(self.page_cam2.update_from_worker)
-                # Connect the drawing button!
                 self.page_cam2.roi_requested.connect(lambda w=worker, p=self.page_cam2: self.open_roi_dialog(w, p))
                
             elif sink_id == "SINK_3":
@@ -136,7 +201,7 @@ class ScrubSinkKiosk(QMainWindow):
                 worker.dashboard_data.connect(self.page_cam5.update_from_worker)
                 self.page_cam5.roi_requested.connect(lambda w=worker, p=self.page_cam5: self.open_roi_dialog(w, p))
 
-            # 2. Route the text data to the Home Overview Tab
+            # 3. Route text data to the Home Overview Tab
             worker.data_ready.connect(self.page_home.update_sink_data)
            
             # Save worker to memory and start it!
@@ -147,6 +212,8 @@ class ScrubSinkKiosk(QMainWindow):
         # When you change settings, we loop through all 5 workers and update them!
         self.page_set.toggles_changed.connect(self.master_update_toggles)
         self.page_set.calibration_requested.connect(self.master_trigger_calibration)
+
+        self.master_update_toggles()
 
     def open_roi_dialog(self, worker, page_widget):
         """Pauses, opens the drawing window, and saves the new red line to the specific camera."""
@@ -163,7 +230,7 @@ class ScrubSinkKiosk(QMainWindow):
     def master_update_toggles(self):
         toggles = self.page_set.get_detection_toggles()
         for worker in self.workers.values():
-            worker.update_toggles(toggles['mask'], toggles['hat'], toggles['wash'])
+            worker.update_toggles(toggles['mask'], toggles['hat'], toggles['wash'],toggles.get('record',True))
 
     def master_trigger_calibration(self):
         for worker in self.workers.values():

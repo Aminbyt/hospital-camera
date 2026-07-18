@@ -4,6 +4,7 @@ import pandas as pd
 import requests
 import threading
 import config
+import logging
 
 # --- THE MISSING GLOBAL LOCK ---
 EXCEL_LOCK = threading.Lock()
@@ -77,11 +78,11 @@ class DataLogger:
 
                 df.to_excel(excel_file, index=False)
 
-            print(f"[LOG] Saved Visit #{visit_count} for {current_user} in {excel_file}")
+            logging.info(f"[LOG] Saved Visit #{visit_count} for {current_user} in {excel_file}")
             return True
 
         except Exception as e:
-            print(f"[ERROR] Could not save to personal Excel: {e}")
+            logging.error(f"[ERROR] Could not save to personal Excel: {e}")
             return False
     @staticmethod
     def send_bot_notification(current_user, login_time, wash_status, mask_status, hat_status):

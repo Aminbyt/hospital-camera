@@ -2,23 +2,24 @@
 
 import os
 
-# --- ENVIRONMENT VARIABLES ---
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer"
-os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
+# ... keep environment variables above exactly the same ...
 
 # --- PATHS ---
-DB_PATH = "database"
+# 1. Automatically find the desktop path for whoever is logged into Windows (e.g., C:\Users\Atieh 1\Desktop)
+desktop_path = os.path.join(os.environ['USERPROFILE'], 'Desktop')
+
+# 2. Point DB_PATH directly to the database folder sitting on the Desktop!
+DB_PATH = os.path.join(desktop_path, "Hospital_Database")
+
 REG_PATH = os.path.join(DB_PATH, "REGISTER_PERSONS")
 INFO_PATH = os.path.join(DB_PATH, "INFORMATION")
 YOLO_MODEL_PATH = 'runs/detect/train/weights/best_openvino_model/'
 
-# Create necessary directories
+# Create necessary directories automatically if they get deleted
 os.makedirs(REG_PATH, exist_ok=True)
 os.makedirs(INFO_PATH, exist_ok=True)
-
+os.makedirs(os.path.join(DB_PATH, "RECORDINGS"), exist_ok=True)
+os.makedirs(os.path.join(DB_PATH, "LOGS"), exist_ok=True)
 # --- AI MODEL PARAMETERS ---
 YOLO_CONF_THRESHOLD = 0.6
 FACE_DETECTION_CONFIDENCE = 0.5
@@ -70,10 +71,9 @@ WINDOW_HEIGHT = 700
 # --- CAMERA HARDWARE MAPPING ---
 # Dahua RTSP Format: rtsp://username:password@IP_Address:554/cam/realmonitor?channel=1&subtype=1
 SINK_CAMERAS = {
-    "SINK_1" : 0
-    #"SINK_1": "rtsp://admin:1937@asdF@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1",
-   # "SINK_2": "rtsp://admin:1937@asdF@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1",
-    #"SINK_3": "rtsp://admin:1937@asdF@192.168.1.103:554/cam/realmonitor?channel=1&subtype=1",
+    "SINK_1": "rtsp://admin:1937@asdF@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1"
+    #"SINK_2": "rtsp://admin:1937@asdF@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1",
+   # "SINK_3": "rtsp://admin:1937@asdF@192.168.1.103:554/cam/realmonitor?channel=1&subtype=1",
    # "SINK_4": "rtsp://admin:1937@asdF@192.168.1.104:554/cam/realmonitor?channel=1&subtype=1",
-    #"SINK_5": "rtsp://admin:1937@asdF@192.168.1.105:554/cam/realmonitor?channel=1&subtype=1"
+   # "SINK_5": "rtsp://admin:1937@asdF@192.168.1.105:554/cam/realmonitor?channel=1&subtype=1"
 }

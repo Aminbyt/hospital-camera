@@ -1,4 +1,4 @@
-"""AI Detection Module - Handles YOLO, InsightFace, and MediaPipe models."""
+"""AI Detection Module - Handles YOLO, InsightFace, MediaPipe, and WHO Handwashing models."""
 import os
 import sys
 import cv2
@@ -8,24 +8,118 @@ import numpy as np
 from ultralytics import YOLO
 import math
 import mediapipe as mp
+import threading
 from PyQt5.QtCore import QThread, pyqtSignal
+
+# --- NEW IMPORTS FOR WHO GESTURE CLASSIFIER ---
+import joblib
+import pandas as pd
+from collections import Counter, deque
+# ----------------------------------------------
 
 # --- PYINSTALLER DLL SECURITY FIX ---
 if getattr(sys, 'frozen', False):
     os.add_dll_directory(sys._MEIPASS)
 
-# --- GLOBAL AI CACHE ---
+# --- GLOBAL AI CACHE & MUTEX LOCK ---
 GLOBAL_INSIGHT_APP = None
 GLOBAL_DB_EMBEDDINGS = {}
+FACE_LOCK = threading.Lock()  # <-- PREVENTS ONNX RUNTIME C++ COLLISION DEADLOCKS!
+
+def initialize_face_engine(db_path):
+    """Initializes InsightFace and loads staff photo embeddings ONCE at system boot!"""
+    global GLOBAL_INSIGHT_APP, GLOBAL_DB_EMBEDDINGS
+   
+    try:
+        if GLOBAL_INSIGHT_APP is None:
+            print("\n[INFO] ==================================================")
+            print("[INFO] Initializing InsightFace Engine at system boot...")
+            from insightface.app import FaceAnalysis
+           
+            GLOBAL_INSIGHT_APP = FaceAnalysis(providers=['CPUExecutionProvider'])
+            GLOBAL_INSIGHT_APP.prepare(ctx_id=0, det_size=(640, 640))
+            print("[INFO] InsightFace Engine initialized successfully!")
+            print("[INFO] ==================================================\n")
+
+        if not GLOBAL_DB_EMBEDDINGS and os.path.exists(db_path):
+            print("\n" + "="*55)
+            print("  🏥 HOSPITAL AI - ACTIVE STAFF FACE DATABASE:")
+            print("="*55)
+            total_people = 0
+            for person_name in sorted(os.listdir(db_path)):
+                person_dir = os.path.join(db_path, person_name)
+                if os.path.isdir(person_dir):
+                    GLOBAL_DB_EMBEDDINGS[person_name] = []
+                   
+                    for img_name in os.listdir(person_dir):
+                        if img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
+                            img_path = os.path.join(person_dir, img_name)
+                            db_img = cv2.imread(img_path)
+                            if db_img is not None:
+                                faces = GLOBAL_INSIGHT_APP.get(db_img)
+                                if faces:
+                                    GLOBAL_DB_EMBEDDINGS[person_name].append(faces[0].normed_embedding)
+                   
+                    angle_count = len(GLOBAL_DB_EMBEDDINGS[person_name])
+                    if angle_count > 0:
+                        total_people += 1
+                        print(f"  👤 {person_name:<25} | Loaded {angle_count} Angle(s)")
+            print("="*55)
+            print(f"  TOTAL REGISTERED STAFF: {total_people}")
+            print("="*55 + "\n")
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize InsightFace engine: {e}")
+
 
 def reset_face_cache():
     """Forces the AI to retrain its memory on the next scan."""
     global GLOBAL_DB_EMBEDDINGS
-    GLOBAL_DB_EMBEDDINGS = {}
-    print("[INFO] Face cache cleared! Will reload DB on next scan.")
+    with FACE_LOCK:
+        GLOBAL_DB_EMBEDDINGS = {}
+        initialize_face_engine(config.REG_PATH)
+    print("[INFO] Face cache reloaded with newly registered staff photos!")
+
+
+def recognize_face_sync(frame_to_check, db_path=config.REG_PATH):
+    """Thread-safe synchronous face recognition using a global mutex lock."""
+    global GLOBAL_INSIGHT_APP, GLOBAL_DB_EMBEDDINGS
+   
+    with FACE_LOCK:  # <-- Guarantees only ONE camera accesses ONNX Runtime at a time!
+        try:
+            if GLOBAL_INSIGHT_APP is None or not GLOBAL_DB_EMBEDDINGS:
+                initialize_face_engine(db_path)
+               
+            if not GLOBAL_DB_EMBEDDINGS:
+                return "UNKNOWN"
+
+            # 1. Detect Live Face safely inside the lock
+            faces = GLOBAL_INSIGHT_APP.get(frame_to_check)
+            if not faces:
+                return "NO_FACE"
+
+            detected_face = faces[0]
+            best_match = "UNKNOWN"
+            min_dist = 1.0  
+
+            # 2. Compare live face against ALL saved angles in RAM
+            for name, embeddings_list in GLOBAL_DB_EMBEDDINGS.items():
+                for saved_embedding in embeddings_list:
+                    dist = np.sum(np.square(detected_face.normed_embedding - saved_embedding))
+                   
+                    if dist < 0.48:
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_match = name
+
+            return best_match
+
+        except Exception as e:
+            print(f"[ERROR] InsightFace Auth Error: {e}")
+            return "UNKNOWN"
+
 
 class FaceRecognitionThread(QThread):
-    """Background thread for InsightFace recognition with Multi-Angle support."""
+    """Background thread wrapper kept for backward compatibility."""
     result_signal = pyqtSignal(str)
 
     def __init__(self, frame_to_check, db_path):
@@ -34,65 +128,12 @@ class FaceRecognitionThread(QThread):
         self.db_path = db_path
 
     def run(self):
-        global GLOBAL_INSIGHT_APP, GLOBAL_DB_EMBEDDINGS
-       
-        try:
-            if GLOBAL_INSIGHT_APP is None:
-                print("[INFO] Safely loading InsightFace and ONNX Runtime in background thread...")
-                from insightface.app import FaceAnalysis
-               
-                GLOBAL_INSIGHT_APP = FaceAnalysis(providers=['CPUExecutionProvider'])
-                GLOBAL_INSIGHT_APP.prepare(ctx_id=0, det_size=(640, 640))
-                print("[INFO] InsightFace Engine initialized successfully!")
+        result = recognize_face_sync(self.frame, self.db_path)
+        self.result_signal.emit(result)
 
-            # 2. Build Database storing MULTIPLE embeddings per person
-            if not GLOBAL_DB_EMBEDDINGS:
-                print("[INFO] Building Multi-Angle Face Embeddings Database...")
-                for person_name in os.listdir(self.db_path):
-                    person_dir = os.path.join(self.db_path, person_name)
-                    if os.path.isdir(person_dir):
-                        GLOBAL_DB_EMBEDDINGS[person_name] = [] # Create a list for this person
-                       
-                        for img_name in os.listdir(person_dir):
-                            if img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
-                                img_path = os.path.join(person_dir, img_name)
-                                db_img = cv2.imread(img_path)
-                                if db_img is not None:
-                                    faces = GLOBAL_INSIGHT_APP.get(db_img)
-                                    if faces:
-                                        # Save every valid photo angle we find!
-                                        GLOBAL_DB_EMBEDDINGS[person_name].append(faces[0].normed_embedding)
-                       
-                        print(f"[DB] Loaded {len(GLOBAL_DB_EMBEDDINGS[person_name])} angle(s) for: {person_name}")
 
-            # 3. Detect Live Face
-            faces = GLOBAL_INSIGHT_APP.get(self.frame)
-            if not faces:
-                self.result_signal.emit("NO_FACE")
-                return
-
-            detected_face = faces[0]
-            best_match = "UNKNOWN"
-            min_dist = 1.0  
-
-            # 4. Compare live face against ALL saved angles for every person
-            for name, embeddings_list in GLOBAL_DB_EMBEDDINGS.items():
-                for saved_embedding in embeddings_list:
-                    dist = np.sum(np.square(detected_face.normed_embedding - saved_embedding))
-                   
-                    # Relaxed threshold to 0.48 specifically for steep 180cm pitch angles
-                    if dist < 0.48:
-                        if dist < min_dist:
-                            min_dist = dist
-                            best_match = name
-
-            self.result_signal.emit(best_match)
-
-        except Exception as e:
-            print(f"[ERROR] InsightFace Auth Error inside thread: {e}")
-            self.result_signal.emit("UNKNOWN")
 class AIModels:
-    """Manages all AI models: YOLO, MediaPipe."""
+    """Manages all AI models: YOLO, MediaPipe, InsightFace, and WHO Handwashing."""
 
     def __init__(self):
         print("[DEBUG] Loading YOLOv8 Model...")
@@ -115,6 +156,24 @@ class AIModels:
 
         self.frame_counter = 0
         self.last_yolo_boxes = []
+
+        # --- LOAD WHO HANDWASHING GESTURE CLASSIFIER ---
+        self.who_model = None
+        model_path = "who_rf_model.pkl"
+        if os.path.exists(model_path):
+            try:
+                self.who_model = joblib.load(model_path)
+                print("✅ WHO Handwashing Random Forest Model loaded successfully!")
+            except Exception as e:
+                print(f"❌ Could not load who_rf_model.pkl: {e}")
+        else:
+            print("⚠️ who_rf_model.pkl not found. WHO gesture classification disabled.")
+
+        # --- TEMPORAL SMOOTHING BUFFER ---
+        # Stores the last 15 frame predictions (~1 second at 15 FPS) to prevent onscreen label flickering
+        self.prediction_buffer = deque(maxlen=15)
+
+        initialize_face_engine(config.REG_PATH)
 
     def detect_ppe(self, frame):
         has_mask, has_hat = False, False
@@ -152,20 +211,8 @@ class AIModels:
 
         for detection in face_results.detections:
             bboxC = detection.location_data.relative_bounding_box
-            if bboxC.width < 0.12: continue
-            
-            face_center_x = bboxC.xmin + (bboxC.width / 2)
-            if face_center_x < 0.20 or face_center_x > 0.80: continue
-               
-            keypoints = detection.location_data.relative_keypoints
-            right_eye, left_eye, nose = keypoints[0], keypoints[1], keypoints[2]
-            
-            dist_right = abs(nose.x - right_eye.x)
-            dist_left = abs(left_eye.x - nose.x)
-            if dist_left == 0 or dist_right == 0: continue
-               
-            ratio = dist_right / dist_left
-            if 0.5 < ratio < 2.0: return True
+            if bboxC.width >= 0.10:
+                return True
         return False
 
     def detect_hands(self, frame_rgb):
@@ -193,6 +240,53 @@ class AIModels:
     def bboxes_intersect(box1, box2):
         return not (box1[2] < box2[0] or box1[0] > box2[2] or 
                    box1[3] < box2[1] or box1[1] > box2[3])
+
+    # --- NEW METHODS FOR WHO STEP PREDICTION & SMOOTHING ---
+    def predict_who_step(self, hand_landmarks_data):
+        """Takes MediaPipe hand results, applies a 15-frame rolling vote, and returns the smoothed WHO step."""
+        if self.who_model is None or not hand_landmarks_data or not hand_landmarks_data.multi_hand_landmarks:
+            self.prediction_buffer.append(0)
+            return self.get_smoothed_step()
+
+        try:
+            # 1. Sort hands left-to-right by wrist X coordinate (matching extraction script order!)
+            sorted_hands = sorted(hand_landmarks_data.multi_hand_landmarks, key=lambda h: h.landmark[0].x)
+
+            # 2. Extract 126 feature coordinates (63 for left hand, 63 for right hand)
+            row = []
+            for hand in sorted_hands[:2]:
+                for lm in hand.landmark:
+                    row.extend([lm.x, lm.y, lm.z])
+
+            # Pad with zeros if only 1 hand is detected in the frame
+            while len(row) < 126:
+                row.append(0.0)
+
+            # 3. Predict using exact feature headers to avoid scikit-learn feature names warnings
+            headers = [f"h{i}_lm{j}_{axis}" for i in (1, 2) for j in range(21) for axis in ("x", "y", "z")]
+            df_features = pd.DataFrame([row], columns=headers)
+
+            raw_prediction = int(self.who_model.predict(df_features)[0])
+
+            # Add raw prediction to our rolling vote buffer
+            self.prediction_buffer.append(raw_prediction)
+            return self.get_smoothed_step()
+
+        except Exception as e:
+            self.prediction_buffer.append(0)
+            return self.get_smoothed_step()
+
+    def get_smoothed_step(self):
+        """Returns the most common prediction from the last 15 frames."""
+        if not self.prediction_buffer:
+            return 0
+        most_common_step, _ = Counter(self.prediction_buffer).most_common(1)[0]
+        return most_common_step
+
+    def clear_buffer(self):
+        """Resets the rolling vote when hands leave the sink or stop washing."""
+        self.prediction_buffer.clear()
+    # -------------------------------------------------------
 
     def cleanup(self):
         self.hands.close()

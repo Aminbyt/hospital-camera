@@ -4,7 +4,7 @@ import os
 import cv2
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
-    QRadioButton, QGroupBox, QMessageBox
+    QRadioButton, QGroupBox, QMessageBox,QComboBox
 )
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QFont, QImage, QPixmap
@@ -40,6 +40,16 @@ class RegistrationTab(QWidget):
         title = QLabel("NEW STAFF REGISTRATION")
         title.setFont(QFont("Arial", 18, QFont.Bold))
         left_layout.addWidget(title)
+
+        cam_group = QGroupBox("SELECT CAMERA SOURCE")
+        cam_layout = QVBoxLayout(cam_group)
+
+        self.cam_selector = QComboBox()
+        self.cam_selector.addItems(["SINK 1","SINK 2","SINK 3","SINK 4","SINK 5"])
+        self.cam_selector.setStyleSheet("padding: 10px; font-size: 12xp; font-weight: bold; border: 1xp solid #000000;")
+
+        cam_layout.addWidget(self.cam_selector)
+        left_layout.addWidget(cam_group)
 
         form_group = QGroupBox("STAFF DETAILS")
         form_layout = QVBoxLayout(form_group)
@@ -92,26 +102,21 @@ class RegistrationTab(QWidget):
         self.reg_video_label.setMinimumSize(480, 360)
         main_layout.addWidget(self.reg_video_label, stretch=2)
 
-    def set_frame(self, frame):
-        """Update the current camera frame.
-        
-        Args:
-            frame: Current camera frame
-        """
+    def set_frame(self, sink_name, frame):
+        """Update the current camera frame only if it matches the selected dropdown sink."""
+        clean_name = sink_name.replace("_", " ")
+        if clean_name != self.cam_selector.currentText():
+            return  
+
         self.last_clean_frame = frame.copy()
-        
-        # Display frame if countdown is active
+       
         if self.countdown_val > 0 and not self.capture_btn.isEnabled():
             self.display_frame_with_countdown(frame)
         else:
             self.display_frame(frame)
 
     def display_frame(self, frame):
-        """Display frame in the video label.
-        
-        Args:
-            frame: Frame to display
-        """
+
         rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
@@ -120,11 +125,7 @@ class RegistrationTab(QWidget):
             self.reg_video_label.width(), self.reg_video_label.height(), Qt.KeepAspectRatio))
 
     def display_frame_with_countdown(self, frame):
-        """Display frame with countdown overlay.
-        
-        Args:
-            frame: Frame to display
-        """
+
         reg_frame = frame.copy()
         h, w = reg_frame.shape[:2]
         
