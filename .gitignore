@@ -25,7 +25,9 @@ medical_env/
 exe_env/
 DataSet1/
 
-
+*who_rf_model.pkl
+*who_handwashing_dataset_01.csv
+*who_handwashing_dataset.csv
 # OS Specific
 Thumbs.db
 .DS_Store
