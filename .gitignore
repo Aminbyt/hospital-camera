@@ -23,8 +23,18 @@ data_1/
 data_2/
 medical_env/
 exe_env/
-AI handwash/
-
+AI handwash/dataset-pskus/DataSet1/
+AI handwash/dataset-pskus/DataSet2/
+AI handwash/dataset-pskus/DataSet3/
+AI handwash/dataset-pskus/DataSet4/
+AI handwash/dataset-pskus/DataSet5/
+AI handwash/dataset-pskus/DataSet6/
+AI handwash/dataset-pskus/DataSet7/
+AI handwash/dataset-pskus/DataSet8/
+AI handwash/dataset-pskus/DataSet9/
+AI handwash/dataset-pskus/DataSet10/
+AI handwash/dataset-pskus/DataSet11/
+AI handwash/dataset-pskus/PSKUS_dataset/
 
 *who_rf_model.pkl
 *who_handwashing_dataset_01.csv
