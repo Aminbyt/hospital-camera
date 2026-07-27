@@ -4,12 +4,13 @@ import os
 import cv2
 import mediapipe as mp
 import pandas as pd
+import math
 
 # --- CONFIGURATION ---
 DATASET_DIR = r"C:\Users\0150027771\Desktop\hospital_camera\DataSet1\DataSet1"  # Or your root dataset folder path
 VIDEOS_DIR = os.path.join(DATASET_DIR, "videos")
 ANNOTATIONS_DIR = os.path.join(DATASET_DIR, "annotations")
-OUTPUT_CSV = "who_handwashing_dataset_01.csv"
+OUTPUT_CSV = "who_handwashing_dataset.csv"
 
 # Map researcher movement codes (Column 2) to WHO Steps (0-6)
 VALID_CODES = {
@@ -89,9 +90,11 @@ def main():
       for j in range(21)
       for axis in ("x", "y", "z")
   ]
+  headers.append("hands_dist") 
   headers.append("label")
   with open(OUTPUT_CSV, mode="w", newline="") as f:
     csv.writer(f).writerow(headers)
+
 
   video_files = [
       f
@@ -161,21 +164,54 @@ def main():
       results = hands.process(img_rgb)
 
       if results.multi_hand_landmarks:
-        # Sort hands left-to-right by wrist X coordinate for consistency
-        sorted_hands = sorted(
-            results.multi_hand_landmarks, key=lambda h: h.landmark[0].x
-        )
+        # --- 1. SORT BY PHYSICAL HANDEDNESS (LEFT VS RIGHT), NOT X-COORD ---
+        # This prevents features from swapping slots when hands cross over!
+        hand_dict = {'Left': None, 'Right': None}
+        for idx, hand_info in enumerate(results.multi_handedness):
+            label = hand_info.classification[0].label  # 'Left' or 'Right'
+            hand_dict[label] = results.multi_hand_landmarks[idx]
+           
+        ordered_hands = [hand_dict['Left'], hand_dict['Right']]
 
         row = []
-        for hand in sorted_hands[:2]:
-          for lm in hand.landmark:
-            row.extend([lm.x, lm.y, lm.z])
+        base_hand_size = 0.01
 
-        # Pad with zeros if only 1 hand was visible in the frame
-        while len(row) < 126:
-          row.append(0.0)
+        for hand in ordered_hands:
+          if hand is not None:
+            wrist_x = hand.landmark[0].x
+            wrist_y = hand.landmark[0].y
+            wrist_z = hand.landmark[0].z
+           
+            mcp_x = hand.landmark[9].x
+            mcp_y = hand.landmark[9].y
+            hand_size = max(math.hypot(mcp_x - wrist_x, mcp_y - wrist_y), 0.01)
+           
+            # Save the first valid hand size to normalize inter-hand distance later
+            if base_hand_size == 0.01:
+                base_hand_size = hand_size
+
+            for lm in hand.landmark:
+              row.extend([
+                  (lm.x - wrist_x) / hand_size,
+                  (lm.y - wrist_y) / hand_size,
+                  (lm.z - wrist_z) / hand_size
+              ])
+          else:
+            # If Left or Right hand is missing, fill its 63 slots with 0.0
+            row.extend([0.0] * 63)
+
+        # --- 2. NORMALIZED INTER-HAND DISTANCE ---
+        if ordered_hands[0] is not None and ordered_hands[1] is not None:
+          h1 = ordered_hands[0].landmark[0]
+          h2 = ordered_hands[1].landmark[0]
+          # Divide by base_hand_size so it is scale-invariant!
+          dist = math.hypot(h1.x - h2.x, h1.y - h2.y) / base_hand_size
+        else:
+          dist = 0.0
+        row.append(dist)
 
         row.append(who_label)
+
 
         # 3. APPEND TO CSV INSIDE THE LOOP (mode="a")
         with open(OUTPUT_CSV, mode="a", newline="") as f:

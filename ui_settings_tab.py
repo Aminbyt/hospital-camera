@@ -40,14 +40,21 @@ class SettingsTab(QWidget):
         self.cb_hat.setChecked(True)
         self.cb_wash = QCheckBox("VERIFY HAND WASHING")
         self.cb_wash.setChecked(True)
+       
+        # --- ADD RECORD CHECKBOX HERE ---
+        self.cb_record = QCheckBox("RECORD VIDEO")
+        self.cb_record.setChecked(True)
 
         self.cb_mask.stateChanged.connect(self.on_toggles_changed)
         self.cb_hat.stateChanged.connect(self.on_toggles_changed)
         self.cb_wash.stateChanged.connect(self.on_toggles_changed)
+        self.cb_record.stateChanged.connect(self.on_toggles_changed) # Connect it
 
         detect_layout.addWidget(self.cb_mask)
         detect_layout.addWidget(self.cb_hat)
         detect_layout.addWidget(self.cb_wash)
+        detect_layout.addWidget(self.cb_record) # Add it to the screen
+       
         settings_layout.addWidget(detect_group)
 
         # --- VIDEO SOURCE ---
@@ -175,5 +182,7 @@ class SettingsTab(QWidget):
         return {
             'mask': self.cb_mask.isChecked(),
             'hat': self.cb_hat.isChecked(),
-            'wash': self.cb_wash.isChecked()
-        }
+            'wash': self.cb_wash.isChecked(),
+            'record':self.cb_record.isChecked()
+            }
+    

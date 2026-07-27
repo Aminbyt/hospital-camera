@@ -79,6 +79,22 @@ def reset_face_cache():
         initialize_face_engine(config.REG_PATH)
     print("[INFO] Face cache reloaded with newly registered staff photos!")
 
+def add_single_face_to_cache(person_name, img_path):
+    """Instantly adds a single new photo to RAM without rebuilding the whole database."""
+    global GLOBAL_INSIGHT_APP, GLOBAL_DB_EMBEDDINGS
+   
+    with FACE_LOCK:
+        # 1. If this is a brand new person, create an empty list for them
+        if person_name not in GLOBAL_DB_EMBEDDINGS:
+            GLOBAL_DB_EMBEDDINGS[person_name] = []
+           
+        # 2. Read and process ONLY the newly captured image
+        db_img = cv2.imread(img_path)
+        if db_img is not None:
+            faces = GLOBAL_INSIGHT_APP.get(db_img)
+            if faces:
+                GLOBAL_DB_EMBEDDINGS[person_name].append(faces[0].normed_embedding)
+                print(f"[INFO] Instantly injected new angle for {person_name} into RAM!")
 
 def recognize_face_sync(frame_to_check, db_path=config.REG_PATH):
     """Thread-safe synchronous face recognition using a global mutex lock."""
@@ -171,7 +187,7 @@ class AIModels:
 
         # --- TEMPORAL SMOOTHING BUFFER ---
         # Stores the last 15 frame predictions (~1 second at 15 FPS) to prevent onscreen label flickering
-        self.prediction_buffer = deque(maxlen=15)
+        self.prediction_buffer = deque(maxlen=45)
 
         initialize_face_engine(config.REG_PATH)
 
@@ -243,38 +259,37 @@ class AIModels:
 
     # --- NEW METHODS FOR WHO STEP PREDICTION & SMOOTHING ---
     def predict_who_step(self, hand_landmarks_data):
-        """Takes MediaPipe hand results, applies a 15-frame rolling vote, and returns the smoothed WHO step."""
-        if self.who_model is None or not hand_landmarks_data or not hand_landmarks_data.multi_hand_landmarks:
-            self.prediction_buffer.append(0)
-            return self.get_smoothed_step()
-
-        try:
-            # 1. Sort hands left-to-right by wrist X coordinate (matching extraction script order!)
-            sorted_hands = sorted(hand_landmarks_data.multi_hand_landmarks, key=lambda h: h.landmark[0].x)
-
-            # 2. Extract 126 feature coordinates (63 for left hand, 63 for right hand)
-            row = []
-            for hand in sorted_hands[:2]:
-                for lm in hand.landmark:
-                    row.extend([lm.x, lm.y, lm.z])
-
-            # Pad with zeros if only 1 hand is detected in the frame
-            while len(row) < 126:
-                row.append(0.0)
-
-            # 3. Predict using exact feature headers to avoid scikit-learn feature names warnings
-            headers = [f"h{i}_lm{j}_{axis}" for i in (1, 2) for j in range(21) for axis in ("x", "y", "z")]
-            df_features = pd.DataFrame([row], columns=headers)
-
-            raw_prediction = int(self.who_model.predict(df_features)[0])
-
-            # Add raw prediction to our rolling vote buffer
-            self.prediction_buffer.append(raw_prediction)
-            return self.get_smoothed_step()
-
-        except Exception as e:
-            self.prediction_buffer.append(0)
-            return self.get_smoothed_step()
+        if not self.who_model or not hand_landmarks_data or not hand_landmarks_data.multi_hand_landmarks:
+            return 0
+        
+        sorted_hands = sorted(
+            hand_landmarks_data.multi_hand_landmarks, key=lambda h: h.landmark[0].x
+        )
+    
+        features = []
+        for hand in sorted_hands[:2]:
+            # --- APPLIED NORMALIZATION FOR LIVE CAMERAS ---
+            wrist_x = hand.landmark[0].x
+            wrist_y = hand.landmark[0].y
+            wrist_z = hand.landmark[0].z
+        
+            for lm in hand.landmark:
+                features.extend([
+                    lm.x - wrist_x,
+                    lm.y - wrist_y,
+                    lm.z - wrist_z
+                ])
+            
+        while len(features) < 126:
+            features.append(0.0)
+        
+        # Predict using the newly trained normalized model
+        pred = self.who_model.predict([features])[0]
+    
+        # Add to rolling buffer for smooth UI voting
+        self.prediction_buffer.append(pred)
+        most_common = Counter(self.prediction_buffer).most_common(1)[0][0]
+        return most_common
 
     def get_smoothed_step(self):
         """Returns the most common prediction from the last 15 frames."""

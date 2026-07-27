@@ -23,7 +23,8 @@ data_1/
 data_2/
 medical_env/
 exe_env/
-DataSet1/
+AI handwash/
+
 
 *who_rf_model.pkl
 *who_handwashing_dataset_01.csv

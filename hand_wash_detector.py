@@ -1,15 +1,17 @@
-"""Hand Washing Detection Module - Detects proper hand washing technique."""
+"""Hand Washing Detection Module - Detects proper hand washing technique and supports WHO gestures."""
 
 import time
 import math
 import cv2
 import config
 import logging
+
 class HandWashDetector:
     def __init__(self):
         self.reset_state()
 
     def reset_state(self):
+        """Resets all timers and tracking variables for a new user session."""
         self.current_wash_time = 0.0
         self.last_hand_seen_time = 0.0
         self.is_washing = False
@@ -23,6 +25,8 @@ class HandWashDetector:
 
         self.last_mask_seen_time = 0
         self.last_hat_seen_time = 0
+        self.who_paused = False  # <-- NEW: Tracks if paused by WHO model
+        self.completed_steps = set()
 
     def extract_hand_points(self, hand_landmarks, frame_w, frame_h):
         hand0 = hand_landmarks
@@ -39,23 +43,18 @@ class HandWashDetector:
 
     def is_scrubbing_forearm(self, scrubber_hand, arm_hand, frame_w, frame_h):
         """Mathematically checks if one hand is scrubbing the other arm's forearm/elbow."""
-        # Arm vector (from middle finger base to wrist)
         dx = (arm_hand.landmark[0].x - arm_hand.landmark[9].x) * frame_w
         dy = (arm_hand.landmark[0].y - arm_hand.landmark[9].y) * frame_h
 
-        # The forearm extends backward from the wrist
         wrist_x = arm_hand.landmark[0].x * frame_w
         wrist_y = arm_hand.landmark[0].y * frame_h
        
-        # Approximate elbow position (about 2.5x the hand length down the arm)
         elbow_x = wrist_x + (dx * 2.5)
         elbow_y = wrist_y + (dy * 2.5)
 
-        # Scrubber hand center
         scrub_x = scrubber_hand.landmark[9].x * frame_w
         scrub_y = scrubber_hand.landmark[9].y * frame_h
 
-        # Calculate Point-to-Line Segment Distance
         l2 = (elbow_x - wrist_x)**2 + (elbow_y - wrist_y)**2
         if l2 == 0:
             return False
@@ -65,8 +64,6 @@ class HandWashDetector:
         proj_y = wrist_y + t * (elbow_y - wrist_y)
 
         dist = math.hypot(scrub_x - proj_x, scrub_y - proj_y)
-
-        # If the scrubber is within 1.5x hand size of the forearm line, it's washing the arm!
         arm_hand_size = math.hypot(dx, dy)
         return dist < (arm_hand_size * 1.5)
 
@@ -117,10 +114,7 @@ class HandWashDetector:
             box1 = ai_models.get_hand_bbox(hand1, frame_w, frame_h)
             box2 = ai_models.get_hand_bbox(hand2, frame_w, frame_h)
            
-            # Rule 1: Hands are rubbing together
             intersecting = ai_models.bboxes_intersect(box1, box2)
-           
-            # Rule 2: One hand is rubbing the other arm's wrist/elbow
             forearm_wash = (self.is_scrubbing_forearm(hand1, hand2, frame_w, frame_h) or
                             self.is_scrubbing_forearm(hand2, hand1, frame_w, frame_h))
 
@@ -128,15 +122,12 @@ class HandWashDetector:
                 valid_wash_this_frame = True
                 self.scrub_anchor_pos = (int((box1[0]+box1[2]+box2[0]+box2[2])/4), int((box1[1]+box1[3]+box2[1]+box2[3])/4))
                 self.scrub_bubble_radius = max(self.calculate_hand_size(hand1, frame_w, frame_h) * 2.0, 150)
-               
-        # NOTE: 1-Hand Logic is entirely removed. 1 Hand = False.
 
         # --- TIMERS & GRACE PERIOD UPDATES ---
         if valid_wash_this_frame:
             actively_washing = True
             self.last_valid_wash_time = current_time
         else:
-            # Slashed grace period to 1.0s to strictly stop timer on hand separation
             time_since_valid = current_time - self.last_valid_wash_time
             if time_since_valid <= 1.0 and self.current_wash_time > 0:
                 actively_washing = True
@@ -144,15 +135,22 @@ class HandWashDetector:
         return {'actively_washing': actively_washing, 'hands_count': hands_count}
 
     def update_wash_time(self, actively_washing):
+        """Updates the timer ONLY when actively washing AND performing a valid WHO step."""
         current_time = time.time()
         if actively_washing:
             if self.is_washing:
                 time_spent = current_time - self.last_hand_seen_time
-                self.current_wash_time += time_spent
+                # Prevent massive jumps if the timer was paused by an incorrect WHO gesture
+                if time_spent < 1.0:
+                    self.current_wash_time += time_spent
             self.is_washing = True
+            self.who_paused = False
             self.last_hand_seen_time = current_time
         else:
+            if self.is_washing:
+                self.who_paused = True  # Flag that we paused because of an invalid gesture
             self.is_washing = False
+            self.last_hand_seen_time = current_time
 
     def get_wash_status(self, hands_count):
         if self.current_wash_time >= config.MAX_WASH_TIME:
@@ -166,7 +164,9 @@ class HandWashDetector:
         if self.is_washing:
             return base_text
         else:
-            if hands_count == 0:
+            if self.who_paused and hands_count == 2:
+                return f"{base_text}\n[ 🛑 PAUSED: USE PROPER WHO GESTURES ]"
+            elif hands_count == 0:
                 if self.current_wash_time >= config.MIN_WASH_TIME:
                     return "WASH COMPLETE: ✅"
                 elif self.current_wash_time > 0:
@@ -174,9 +174,9 @@ class HandWashDetector:
                 else:
                     return "WASH TIMER:⏯️ Pause"
             elif hands_count == 1:
-                return f"{base_text}\n[ ⚠️WARNING: USE BOTH HANDS ]"
+                return f"{base_text}\n[ ⚠️ WARNING: USE BOTH HANDS ]"
             elif hands_count == 2:
-                return f"{base_text}\n[⚠️ WARNING: RUB HANDS OR ARMS TOGETHER ]"
+                return f"{base_text}\n[ ⚠️ WARNING: RUB HANDS OR ARMS TOGETHER ]"
 
         return base_text
 

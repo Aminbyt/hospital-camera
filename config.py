@@ -60,8 +60,13 @@ STYLESHEET = """
 """
 
 # --- BOT NOTIFICATION SETTINGS ---
-BOT_API_URL = "https://tapi.bale.ai/1291761237:o-9xVmgV_Vw4iS-5XA9Yc4TWQ182YqNM5v8/sendMessage"
-BOT_CHAT_ID = "6277616651"
+#real bot
+    #BOT_API_URL = "https://tapi.bale.ai/298955825:DQDWFHuBisRRHUa-XyDcKl5p-Kg2cWhaDbM/sendMessage"
+    #BOT_CHAT_ID = "6277616651"
+    #BOT_TIMEOUT = 3  # seconds
+#test
+BOT_API_URL = "https://tapi.bale.ai/298955825:DQDWFHuBisRRHUa-XyDcKl5p-Kg2cWhaDbM/sendMessage"
+BOT_CHAT_ID = "5209437369"
 BOT_TIMEOUT = 3  # seconds
 
 # --- WINDOW SETTINGS ---
@@ -71,8 +76,8 @@ WINDOW_HEIGHT = 700
 # --- CAMERA HARDWARE MAPPING ---
 # Dahua RTSP Format: rtsp://username:password@IP_Address:554/cam/realmonitor?channel=1&subtype=1
 SINK_CAMERAS = {
-    "SINK_1": "rtsp://admin:1937@asdF@192.168.1.101:554/cam/realmonitor?channel=1&subtype=1"
-    #"SINK_2": "rtsp://admin:1937@asdF@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1",
+    "SINK_1": 0
+    #"SINK_2": "rtsp://admin:1937@asdF@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1"
    # "SINK_3": "rtsp://admin:1937@asdF@192.168.1.103:554/cam/realmonitor?channel=1&subtype=1",
    # "SINK_4": "rtsp://admin:1937@asdF@192.168.1.104:554/cam/realmonitor?channel=1&subtype=1",
    # "SINK_5": "rtsp://admin:1937@asdF@192.168.1.105:554/cam/realmonitor?channel=1&subtype=1"

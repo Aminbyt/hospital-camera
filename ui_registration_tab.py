@@ -10,9 +10,7 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QFont, QImage, QPixmap
 import config
 from data_logger import DataLogger
-from ai_models import reset_face_cache
-
-
+from ai_models import reset_face_cache ,add_single_face_to_cache
 class RegistrationTab(QWidget):
     """Registration tab for adding new staff members."""
 
@@ -182,7 +180,7 @@ class RegistrationTab(QWidget):
 
         # 1. Format folder path using First_Last convention
         full_name = f"{fname} {lname}"
-        clean_folder_name = f"{fname}_{lname}"
+        clean_folder_name = f"{fname}_{lname}".replace(" ","_")
         user_dir = os.path.join(config.REG_PATH, clean_folder_name)
         os.makedirs(user_dir, exist_ok=True)
 
@@ -198,7 +196,8 @@ class RegistrationTab(QWidget):
         cv2.imwrite(save_path, self.last_clean_frame)
 
         # 4. Reset the AI memory so it instantly loads and learns the new angle!
-        reset_face_cache()
+        # reset_face_cache()
+        add_single_face_to_cache(clean_folder_name,save_path)
 
         # 5. Reset UI & give confirmation
         self.capture_btn.setText("LOOK AT CAMERA & START TIMER")

@@ -1,6 +1,7 @@
 """Camera Worker Module - Background thread for AI processing."""
 import cv2
 import time
+import numpy as np
 import threading
 from PyQt5.QtCore import QThread, pyqtSignal
 import logging
@@ -46,8 +47,8 @@ class RTSPGrabber:
 
 class CameraWorker(QThread):
     # Signals to send data back to the UI safely
-    frame_ready = pyqtSignal(object)   
-    raw_frame_ready = pyqtSignal(object)
+    frame_ready = pyqtSignal(np.ndarray)   
+    raw_frame_ready = pyqtSignal(np.ndarray)
     data_ready = pyqtSignal(str, dict) 
     dashboard_data = pyqtSignal(dict)  
 
@@ -159,15 +160,22 @@ class CameraWorker(QThread):
                     wash_info = self.wash_detector.detect_washing(
                         hand_results, frame_w, frame_h, self.sink_y_start, self.ai_models
                     )
-                    self.wash_detector.update_wash_time(wash_info['actively_washing'])
-                    frame = self.wash_detector.draw_bubble_zone(frame)
-                    
-                    # ---> DISPLAY LIVE WHO GESTURE <---
+                
+                    # ---> PREDICT LIVE WHO GESTURE FIRST <---
+                    current_who_step = 0
                     if wash_info['actively_washing']:
                         current_who_step = self.ai_models.predict_who_step(hand_results['hand_results'])
+                    
+                        # GATE THE TIMER: Only add time if they are performing Steps 1-6!
+                        # If current_who_step == 0, is_valid_who_step is False, and the clock pauses.
+                        is_valid_who_step = (current_who_step >= 1 and current_who_step <= 6)
+                        self.wash_detector.update_wash_time(is_valid_who_step)
 
+                        if is_valid_who_step:
+                            self.wash_detector.completed_steps.add(current_who_step)
+                    
                         step_labels = {
-                            0: "Scrubbing / Transitioning",
+                            0: "PAUSED: Incorrect Gesture / Transition",
                             1: "Step 1: Palm to Palm",
                             2: "Step 2: Right over Left Dorsum",
                             3: "Step 3: Palm to Palm Interlaced",
@@ -177,15 +185,20 @@ class CameraWorker(QThread):
                         }
                         label_text = step_labels.get(current_who_step, "Detecting...")
 
-                        # Draw a clean dark green background banner for text readability
-                        cv2.rectangle(frame, (20, 30), (460, 80), (27, 67, 50), -1)  # Dark green fill
-                        cv2.rectangle(frame, (20, 30), (460, 80), (0, 255, 0), 2)    # Bright green border
-                        cv2.putText(frame, label_text, (35, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+                        # Draw banner (Red/Orange if step 0, Bright Green if steps 1-6)
+                        bg_color = (27, 67, 50) if is_valid_who_step else (0, 0, 150)
+                        border_color = (0, 255, 0) if is_valid_who_step else (0, 165, 255)
+                    
+                        cv2.rectangle(frame, (20, 30), (460, 80), bg_color, -1)
+                        cv2.rectangle(frame, (20, 30), (460, 80), border_color, 2)
+                        cv2.putText(frame, label_text, (35, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (255, 255, 255), 2)
                     else:
-                        # Clear smoothing buffer when hands pause or leave the active wash zone
+                        self.wash_detector.update_wash_time(False)
                         self.ai_models.clear_buffer()
+                    
+                    frame = self.wash_detector.draw_bubble_zone(frame)
                 else:
-                    # Clear smoothing buffer when no hands are detected
+                    self.wash_detector.update_wash_time(False)
                     self.ai_models.clear_buffer()
            
             else:
@@ -267,14 +280,24 @@ class CameraWorker(QThread):
             mask_status = "YES" if (self.session_manager.last_person_seen_time - self.wash_detector.last_mask_seen_time) <= 3.0 else "NO"
             hat_status = "YES" if (self.session_manager.last_person_seen_time - self.wash_detector.last_hat_seen_time) <= 3.0 else "NO"
 
+            all_steps = "YES" if len(self.wash_detector.completed_steps)>= 6 else "NO"
+
             self.data_logger.log_and_notify(
                 self.session_manager.current_user,
                 self.session_manager.login_time,
-                wash_status, mask_status, hat_status
+                wash_status, mask_status, hat_status,all_steps
             )
+            
+    
+        # 1. Clear session
         self.session_manager.clear_user()
+    
+        # 2. Force reset wash detector values explicitly
         self.wash_detector.reset_state()
-        self.ai_models.clear_buffer()  # <-- Clean reset of the smoothing buffer on logout!
+        self.wash_detector.current_wash_time = 0.0  # <-- FORCE ZERO OUT TIME
+    
+        # 3. Clear AI prediction buffers
+        self.ai_models.clear_buffer()
 
     def update_toggles(self, mask, hat, wash, record=True):
         self.check_mask = mask
