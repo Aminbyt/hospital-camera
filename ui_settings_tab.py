@@ -1,5 +1,6 @@
 """Settings Tab UI Module - System configuration interface."""
-
+import os
+import json
 import cv2
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QCheckBox, QRadioButton,
@@ -9,12 +10,33 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 import config
 
+SETTINGS_FILE = os.path.join(config.DB_PATH, "settings.json")
+
+def load_saved_settings():
+    """Loads settings from disk, defaulting all toggles to True if missing."""
+    defaults = {'mask': True, 'hat': True, 'wash': True, 'record': True}
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                saved = json.load(f)
+                defaults.update(saved)
+        except Exception:
+            pass
+    return defaults
+
+def save_settings_to_disk(data):
+    """Saves current toggle states to disk."""
+    try:
+        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception:
+        pass
+
 
 class SettingsTab(QWidget):
     """Settings tab for system configuration."""
-    
-    # Signals
-    camera_source_changed = pyqtSignal(object)  # int or str (path)
+    camera_source_changed = pyqtSignal(object)
     roi_requested = pyqtSignal()
     calibration_requested = pyqtSignal()
     toggles_changed = pyqtSignal()
@@ -25,36 +47,39 @@ class SettingsTab(QWidget):
         self.build_ui()
 
     def build_ui(self):
-        """Build the settings UI."""
         settings_layout = QVBoxLayout(self)
         settings_layout.setAlignment(Qt.AlignTop)
         settings_layout.setContentsMargins(30, 30, 30, 30)
+
+        # Load persistent settings
+        saved_opts = load_saved_settings()
 
         # --- MODULE CONFIGURATION ---
         detect_group = QGroupBox("MODULE CONFIGURATION")
         detect_layout = QVBoxLayout(detect_group)
 
         self.cb_mask = QCheckBox("VERIFY MEDICAL MASK ")
-        self.cb_mask.setChecked(True)
+        self.cb_mask.setChecked(saved_opts.get('mask', True))
+
         self.cb_hat = QCheckBox("VERIFY SURGICAL HAT ")
-        self.cb_hat.setChecked(True)
+        self.cb_hat.setChecked(saved_opts.get('hat', True))
+
         self.cb_wash = QCheckBox("VERIFY HAND WASHING")
-        self.cb_wash.setChecked(True)
-       
-        # --- ADD RECORD CHECKBOX HERE ---
+        self.cb_wash.setChecked(saved_opts.get('wash', True))
+
         self.cb_record = QCheckBox("RECORD VIDEO")
-        self.cb_record.setChecked(True)
+        self.cb_record.setChecked(saved_opts.get('record', True))
 
         self.cb_mask.stateChanged.connect(self.on_toggles_changed)
         self.cb_hat.stateChanged.connect(self.on_toggles_changed)
         self.cb_wash.stateChanged.connect(self.on_toggles_changed)
-        self.cb_record.stateChanged.connect(self.on_toggles_changed) # Connect it
+        self.cb_record.stateChanged.connect(self.on_toggles_changed)
 
         detect_layout.addWidget(self.cb_mask)
         detect_layout.addWidget(self.cb_hat)
         detect_layout.addWidget(self.cb_wash)
-        detect_layout.addWidget(self.cb_record) # Add it to the screen
-       
+        detect_layout.addWidget(self.cb_record)
+
         settings_layout.addWidget(detect_group)
 
         # --- VIDEO SOURCE ---
@@ -64,7 +89,6 @@ class SettingsTab(QWidget):
         self.radio_webcam = QRadioButton("LIVE WEBCAM STREAM")
         self.radio_webcam.setChecked(True)
         self.radio_video = QRadioButton("OFFLINE VIDEO FILE")
-
         self.btn_group = QButtonGroup()
         self.btn_group.addButton(self.radio_webcam)
         self.btn_group.addButton(self.radio_video)
@@ -73,8 +97,6 @@ class SettingsTab(QWidget):
         source_layout.addWidget(self.radio_video)
 
         options_layout = QVBoxLayout()
-
-        # Webcam options
         self.webcam_widget = QWidget()
         webcam_layout = QHBoxLayout(self.webcam_widget)
         webcam_label = QLabel("CAMERA INDEX:")
@@ -87,16 +109,13 @@ class SettingsTab(QWidget):
         webcam_layout.addStretch()
         options_layout.addWidget(self.webcam_widget)
 
-        # Video file options
         self.video_widget = QWidget()
         video_layout = QHBoxLayout(self.video_widget)
         self.video_path_input = QLineEdit()
         self.video_path_input.setPlaceholderText("SELECT FILE PATH...")
         self.video_path_input.setReadOnly(True)
-
         browse_btn = QPushButton("BROWSE")
         browse_btn.clicked.connect(self.browse_file)
-
         video_layout.addWidget(self.video_path_input)
         video_layout.addWidget(browse_btn)
         self.video_widget.hide()
@@ -110,7 +129,6 @@ class SettingsTab(QWidget):
 
         # --- CAMERA CONTROLS ---
         controls_layout = QHBoxLayout()
-        
         apply_btn = QPushButton("RESTART SYSTEM FEED")
         apply_btn.clicked.connect(self.on_camera_apply)
         controls_layout.addWidget(apply_btn)
@@ -128,11 +146,6 @@ class SettingsTab(QWidget):
         settings_layout.addStretch()
 
     def toggle_source_options(self, is_webcam):
-        """Toggle between webcam and video file options.
-        
-        Args:
-            is_webcam: bool - True for webcam, False for video file
-        """
         if is_webcam:
             self.webcam_widget.show()
             self.video_widget.hide()
@@ -141,48 +154,32 @@ class SettingsTab(QWidget):
             self.video_widget.show()
 
     def browse_file(self):
-        """Open file browser for video selection."""
         file_path, _ = QFileDialog.getOpenFileName(
-            self, 
-            "Select Video File", 
-            "",
-            "Video Files (*.mp4 *.avi *.mov *.mkv)"
+            self, "Select Video File", "", "Video Files (*.mp4 *.avi *.mov *.mkv)"
         )
         if file_path:
             self.video_path_input.setText(file_path)
 
     def get_camera_source(self):
-        """Get the selected camera source.
-        
-        Returns:
-            int or str: Camera index or video file path
-        """
         if self.radio_webcam.isChecked():
             return self.cam_spinbox.value()
         else:
             return self.video_path_input.text()
 
     def on_camera_apply(self):
-        """Handle camera source change."""
         source = self.get_camera_source()
         if self.radio_video.isChecked() and not source:
             return
         self.camera_source_changed.emit(source)
 
     def on_toggles_changed(self):
-        """Handle detection toggle changes."""
+        save_settings_to_disk(self.get_detection_toggles())
         self.toggles_changed.emit()
 
     def get_detection_toggles(self):
-        """Get current detection toggle states.
-        
-        Returns:
-            dict: {'mask': bool, 'hat': bool, 'wash': bool}
-        """
         return {
             'mask': self.cb_mask.isChecked(),
             'hat': self.cb_hat.isChecked(),
             'wash': self.cb_wash.isChecked(),
-            'record':self.cb_record.isChecked()
-            }
-    
+            'record': self.cb_record.isChecked()
+        }

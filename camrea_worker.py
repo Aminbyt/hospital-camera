@@ -276,28 +276,28 @@ class CameraWorker(QThread):
             self.recorder.stop_recording()
 
         if self.session_manager.is_authenticated():
+            wash_duration = int(self.wash_detector.current_wash_time)
             wash_status = "YES" if self.wash_detector.current_wash_time >= config.MIN_WASH_TIME else "NO"
             mask_status = "YES" if (self.session_manager.last_person_seen_time - self.wash_detector.last_mask_seen_time) <= 3.0 else "NO"
             hat_status = "YES" if (self.session_manager.last_person_seen_time - self.wash_detector.last_hat_seen_time) <= 3.0 else "NO"
-
-            all_steps = "YES" if len(self.wash_detector.completed_steps)>= 6 else "NO"
+            all_steps = "YES" if len(self.wash_detector.completed_steps) >= 6 else "NO"
 
             self.data_logger.log_and_notify(
                 self.session_manager.current_user,
                 self.session_manager.login_time,
-                wash_status, mask_status, hat_status,all_steps
+                wash_status, mask_status, hat_status, all_steps, wash_duration
             )
-            
-    
+
         # 1. Clear session
         self.session_manager.clear_user()
-    
+
         # 2. Force reset wash detector values explicitly
         self.wash_detector.reset_state()
-        self.wash_detector.current_wash_time = 0.0  # <-- FORCE ZERO OUT TIME
-    
+        self.wash_detector.current_wash_time = 0.0
+
         # 3. Clear AI prediction buffers
         self.ai_models.clear_buffer()
+
 
     def update_toggles(self, mask, hat, wash, record=True):
         self.check_mask = mask

@@ -83,6 +83,7 @@ from ui_settings_tab import SettingsTab
 from camrea_worker import CameraWorker
 from sink_calibration import SinkCalibration, create_roi_dialog
 from send_daily_reports import DailyReportThread
+from heartbeat_worker import HeartbeatThread
 
 class ScrubSinkKiosk(QMainWindow):
     """Master Control Center."""
@@ -219,6 +220,9 @@ class ScrubSinkKiosk(QMainWindow):
         self.report_thread =DailyReportThread()
         self.report_thread.start()
 
+        self.heartbeat_thread = HeartbeatThread()
+        self.heartbeat_thread.start()
+
     def open_roi_dialog(self, worker, page_widget):
         """Pauses, opens the drawing window, and saves the new red line to the specific camera."""
         if not hasattr(page_widget, 'last_frame') or page_widget.last_frame is None:
@@ -244,6 +248,9 @@ class ScrubSinkKiosk(QMainWindow):
         """Safely shut down all 5 cameras when closing the app."""
         if hasattr(self , "report_thread"):
             self.report_thread.stop()
+
+        if hasattr(self , "heartbeat_thread"):
+            self.heartbeat_thread.stop()
             
         for worker in self.workers.values():
             worker.stop()

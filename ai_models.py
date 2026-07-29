@@ -174,20 +174,29 @@ class AIModels:
         self.last_yolo_boxes = []
 
         # --- LOAD WHO HANDWASHING GESTURE CLASSIFIER ---
-        self.who_model = None
-        model_path = "who_rf_model.pkl"
+# --- LOAD WHO HANDWASHING GESTURE CLASSIFIER (LSTM ONNX) ---
+        self.who_session = None
+        model_path = "who_lstm_model.onnx"
         if os.path.exists(model_path):
             try:
-                self.who_model = joblib.load(model_path)
-                print("✅ WHO Handwashing Random Forest Model loaded successfully!")
+                import onnxruntime as ort
+                self.who_session = ort.InferenceSession(
+                    model_path,
+                    providers=['CPUExecutionProvider']
+                )
+                self.who_input_name = self.who_session.get_inputs()[0].name
+                print("✅ WHO Handwashing LSTM Neural Network loaded successfully!")
             except Exception as e:
-                print(f"❌ Could not load who_rf_model.pkl: {e}")
+                print(f"❌ Could not load who_lstm_model.onnx: {e}")
         else:
-            print("⚠️ who_rf_model.pkl not found. WHO gesture classification disabled.")
+            print("⚠️ who_lstm_model.onnx not found. WHO gesture classification disabled.")
 
-        # --- TEMPORAL SMOOTHING BUFFER ---
-        # Stores the last 15 frame predictions (~1 second at 15 FPS) to prevent onscreen label flickering
+        # --- TEMPORAL SMOOTHING BUFFERS ---
+        # Stores the last 45 frame predictions (~1.5 seconds) for smooth UI voting
         self.prediction_buffer = deque(maxlen=45)
+       
+        # <-- NEW: Stores a rolling window of 15 frames of hand coordinates for the LSTM
+        self.lstm_sequence_buffer = deque(maxlen=15)
 
         initialize_face_engine(config.REG_PATH)
 
@@ -259,37 +268,53 @@ class AIModels:
 
     # --- NEW METHODS FOR WHO STEP PREDICTION & SMOOTHING ---
     def predict_who_step(self, hand_landmarks_data):
-        if not self.who_model or not hand_landmarks_data or not hand_landmarks_data.multi_hand_landmarks:
+        if not self.who_session or not hand_landmarks_data or not hand_landmarks_data.multi_hand_landmarks:
+            self.lstm_sequence_buffer.clear()
             return 0
-        
+           
         sorted_hands = sorted(
             hand_landmarks_data.multi_hand_landmarks, key=lambda h: h.landmark[0].x
         )
-    
-        features = []
+       
+        current_features = []
         for hand in sorted_hands[:2]:
-            # --- APPLIED NORMALIZATION FOR LIVE CAMERAS ---
-            wrist_x = hand.landmark[0].x
-            wrist_y = hand.landmark[0].y
-            wrist_z = hand.landmark[0].z
-        
+            wrist = hand.landmark[0]
+            middle_base = hand.landmark[9]
+           
+            # Scale Normalization
+            import math
+            hand_size = math.hypot(wrist.x - middle_base.x, wrist.y - middle_base.y)
+            if hand_size == 0: hand_size = 1.0
+           
             for lm in hand.landmark:
-                features.extend([
-                    lm.x - wrist_x,
-                    lm.y - wrist_y,
-                    lm.z - wrist_z
+                current_features.extend([
+                    (lm.x - wrist.x) / hand_size,
+                    (lm.y - wrist.y) / hand_size,
+                    (lm.z - wrist.z) / hand_size
                 ])
-            
-        while len(features) < 126:
-            features.append(0.0)
-        
-        # Predict using the newly trained normalized model
-        pred = self.who_model.predict([features])[0]
-    
+               
+        while len(current_features) < 126:
+            current_features.append(0.0)
+           
+        # --- ADD TO LSTM 15-FRAME TIME SEQUENCE ---
+        self.lstm_sequence_buffer.append(current_features)
+       
+        # We need a full 15-frame history before the LSTM can predict smoothly
+        if len(self.lstm_sequence_buffer) < 15:
+            return 0
+           
+        # Convert deque to shape (1, 15, 126) float32 numpy array
+        seq_array = np.array([list(self.lstm_sequence_buffer)], dtype=np.float32)
+       
+        # Run CPU ONNX Inference (takes <1 millisecond!)
+        logits = self.who_session.run(None, {self.who_input_name: seq_array})[0]
+        pred = int(np.argmax(logits, axis=1)[0])
+       
         # Add to rolling buffer for smooth UI voting
         self.prediction_buffer.append(pred)
         most_common = Counter(self.prediction_buffer).most_common(1)[0][0]
         return most_common
+
 
     def get_smoothed_step(self):
         """Returns the most common prediction from the last 15 frames."""

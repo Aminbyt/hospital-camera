@@ -168,46 +168,53 @@ class RegistrationTab(QWidget):
             self.register_new_user()
 
     def register_new_user(self):
-        """Captures the current clean frame and appends it as a new angle in the user's folder."""
+        """Captures the current clean frame, saves role metadata, and appends reference photos."""
+        import json
         fname = self.reg_fname.text().strip().upper()
         lname = self.reg_lname.text().strip().upper()
-       
+        role = self.reg_role.text().strip().title() or "N/A"
+
         if not fname or not lname or self.last_clean_frame is None:
             QMessageBox.warning(self, "ERROR", "Missing name or camera frame!")
             self.capture_btn.setText("LOOK AT CAMERA & START TIMER")
             self.capture_btn.setEnabled(True)
             return
 
-        # 1. Format folder path using First_Last convention
+        # 1. Format folder path
         full_name = f"{fname} {lname}"
-        clean_folder_name = f"{fname}_{lname}".replace(" ","_")
+        clean_folder_name = f"{fname}_{lname}".replace(" ", "_")
         user_dir = os.path.join(config.REG_PATH, clean_folder_name)
         os.makedirs(user_dir, exist_ok=True)
 
-        # 2. COUNT EXISTING PHOTOS to prevent overwriting and enable sequential angles
+        # 2. Save/Update Role in user_info.json
+        info_path = os.path.join(user_dir, "user_info.json")
+        with open(info_path, "w") as f:
+            json.dump({"role": role}, f, indent=4)
+
+        # 3. Count existing photos for sequential naming
         existing_photos = [f for f in os.listdir(user_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
         next_angle_num = len(existing_photos) + 1
 
-        # 3. Save with a sequential file name (angle_1.jpg, angle_2.jpg, etc.)
+        # 4. Save image
         file_name = f"angle_{next_angle_num}.jpg"
         save_path = os.path.join(user_dir, file_name)
-
-        # Save the clean untouched frame captured before AI drawing overlays
         cv2.imwrite(save_path, self.last_clean_frame)
 
-        # 4. Reset the AI memory so it instantly loads and learns the new angle!
-        # reset_face_cache()
-        add_single_face_to_cache(clean_folder_name,save_path)
+        # 5. Inject into live RAM cache
+        add_single_face_to_cache(clean_folder_name, save_path)
 
-        # 5. Reset UI & give confirmation
+        # 6. Reset UI fields & show confirmation
+        self.reg_fname.clear()
+        self.reg_lname.clear()
+        self.reg_role.clear()
         self.capture_btn.setText("LOOK AT CAMERA & START TIMER")
         self.capture_btn.setEnabled(True)
-       
+
         QMessageBox.information(
             self,
             "SUCCESS",
-            f"Saved {file_name} for {full_name}!\nTotal reference angles stored: {next_angle_num}"
+            f"Saved {file_name} for {full_name}\nRole: {role}\nTotal reference angles stored: {next_angle_num}"
         )
-        print(f"[REGISTRATION] Saved angle #{next_angle_num} for {full_name} to {save_path}")
+        print(f"[REGISTRATION] Saved angle #{next_angle_num} for {full_name} ({role}) to {save_path}")
 
 
