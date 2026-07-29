@@ -37,6 +37,7 @@ AI handwash/dataset-pskus/DataSet11/
 AI handwash/dataset-pskus/PSKUS_dataset/
 
 *who_rf_model.pkl
+*who_xgb_model.pkl
 *who_handwashing_dataset_01.csv
 *who_handwashing_dataset.csv
 # OS Specific

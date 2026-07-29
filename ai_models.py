@@ -175,7 +175,7 @@ class AIModels:
 
         # --- LOAD WHO HANDWASHING GESTURE CLASSIFIER ---
         self.who_model = None
-        model_path = "who_rf_model.pkl"
+        model_path = "who_xgb_model.pkl"
         if os.path.exists(model_path):
             try:
                 self.who_model = joblib.load(model_path)
@@ -188,6 +188,8 @@ class AIModels:
         # --- TEMPORAL SMOOTHING BUFFER ---
         # Stores the last 15 frame predictions (~1 second at 15 FPS) to prevent onscreen label flickering
         self.prediction_buffer = deque(maxlen=45)
+
+        self.feature_velocity_buffer = deque(maxlen=5)
 
         initialize_face_engine(config.REG_PATH)
 
@@ -260,32 +262,48 @@ class AIModels:
     # --- NEW METHODS FOR WHO STEP PREDICTION & SMOOTHING ---
     def predict_who_step(self, hand_landmarks_data):
         if not self.who_model or not hand_landmarks_data or not hand_landmarks_data.multi_hand_landmarks:
+            self.feature_velocity_buffer.clear() # Clear memory if hands leave the frame
             return 0
-        
+           
         sorted_hands = sorted(
             hand_landmarks_data.multi_hand_landmarks, key=lambda h: h.landmark[0].x
         )
-    
-        features = []
+       
+        current_features = []
         for hand in sorted_hands[:2]:
-            # --- APPLIED NORMALIZATION FOR LIVE CAMERAS ---
-            wrist_x = hand.landmark[0].x
-            wrist_y = hand.landmark[0].y
-            wrist_z = hand.landmark[0].z
-        
+            wrist = hand.landmark[0]
+            middle_base = hand.landmark[9]
+           
+            # Scale Normalization
+            import math
+            hand_size = math.hypot(wrist.x - middle_base.x, wrist.y - middle_base.y)
+            if hand_size == 0: hand_size = 1.0
+           
             for lm in hand.landmark:
-                features.extend([
-                    lm.x - wrist_x,
-                    lm.y - wrist_y,
-                    lm.z - wrist_z
+                current_features.extend([
+                    (lm.x - wrist.x) / hand_size,
+                    (lm.y - wrist.y) / hand_size,
+                    (lm.z - wrist.z) / hand_size
                 ])
-            
-        while len(features) < 126:
-            features.append(0.0)
-        
-        # Predict using the newly trained normalized model
-        pred = self.who_model.predict([features])[0]
-    
+               
+        while len(current_features) < 126:
+            current_features.append(0.0)
+           
+        # --- CALCULATE VELOCITY ---
+        self.feature_velocity_buffer.append(current_features)
+       
+        # Grab the oldest frame in our tiny 5-frame buffer
+        prev_features = self.feature_velocity_buffer[0]
+       
+        # Velocity = Current - Previous
+        velocity = [curr - prev for curr, prev in zip(current_features, prev_features)]
+       
+        # Combine into 252 features
+        final_features = current_features + velocity
+           
+        # Predict using XGBoost
+        pred = self.who_model.predict([final_features])[0]
+       
         # Add to rolling buffer for smooth UI voting
         self.prediction_buffer.append(pred)
         most_common = Counter(self.prediction_buffer).most_common(1)[0][0]
