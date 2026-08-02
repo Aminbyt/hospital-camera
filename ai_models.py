@@ -174,9 +174,8 @@ class AIModels:
         self.last_yolo_boxes = []
 
         # --- LOAD WHO HANDWASHING GESTURE CLASSIFIER ---
-# --- LOAD WHO HANDWASHING GESTURE CLASSIFIER (LSTM ONNX) ---
         self.who_session = None
-        model_path = "who_lstm_model.onnx"
+        model_path = "who_cnn_lstm_model.onnx"
         if os.path.exists(model_path):
             try:
                 import onnxruntime as ort
@@ -196,7 +195,7 @@ class AIModels:
         self.prediction_buffer = deque(maxlen=45)
        
         # <-- NEW: Stores a rolling window of 15 frames of hand coordinates for the LSTM
-        self.lstm_sequence_buffer = deque(maxlen=15)
+        self.lstm_sequence_buffer = deque(maxlen=30)
 
         initialize_face_engine(config.REG_PATH)
 
@@ -281,7 +280,6 @@ class AIModels:
             wrist = hand.landmark[0]
             middle_base = hand.landmark[9]
            
-            # Scale Normalization
             import math
             hand_size = math.hypot(wrist.x - middle_base.x, wrist.y - middle_base.y)
             if hand_size == 0: hand_size = 1.0
@@ -295,22 +293,30 @@ class AIModels:
                
         while len(current_features) < 126:
             current_features.append(0.0)
+
+        # --- NEW: ADD HAND-TO-HAND DISTANCE (128 Dims) ---
+        if len(sorted_hands) == 2:
+            h1_w, h2_w = sorted_hands[0].landmark[0], sorted_hands[1].landmark[0]
+            current_features.append(math.hypot(h1_w.x - h2_w.x, h1_w.y - h2_w.y))
            
-        # --- ADD TO LSTM 15-FRAME TIME SEQUENCE ---
+            h1_i, h2_i = sorted_hands[0].landmark[8], sorted_hands[1].landmark[8]
+            current_features.append(math.hypot(h1_i.x - h2_i.x, h1_i.y - h2_i.y))
+        else:
+            current_features.extend([1.0, 1.0])
+           
+        # --- ADD TO LSTM 30-FRAME TIME SEQUENCE ---
         self.lstm_sequence_buffer.append(current_features)
        
-        # We need a full 15-frame history before the LSTM can predict smoothly
-        if len(self.lstm_sequence_buffer) < 15:
+        # Wait for 1 full second of motion before predicting
+        if len(self.lstm_sequence_buffer) < 30:
             return 0
            
-        # Convert deque to shape (1, 15, 126) float32 numpy array
+        # Convert deque to shape (1, 30, 128) float32 numpy array
         seq_array = np.array([list(self.lstm_sequence_buffer)], dtype=np.float32)
        
-        # Run CPU ONNX Inference (takes <1 millisecond!)
         logits = self.who_session.run(None, {self.who_input_name: seq_array})[0]
         pred = int(np.argmax(logits, axis=1)[0])
        
-        # Add to rolling buffer for smooth UI voting
         self.prediction_buffer.append(pred)
         most_common = Counter(self.prediction_buffer).most_common(1)[0][0]
         return most_common

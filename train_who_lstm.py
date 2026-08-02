@@ -13,10 +13,10 @@ from collections import defaultdict
 
 # --- CONFIGURATION ---
 FRAMES_DIR = "./AI handwash/dataset-pskus/PSKUS_dataset/frames/trainval"
-ONNX_SAVE_PATH = "who_lstm_model.onnx"
+ONNX_SAVE_PATH = "who_cnn_lstm_model.onnx"
 MAX_SAMPLES_PER_CLASS = 15000
-SEQ_LEN = 15       # Look at 15 continuous frames (0.5 seconds of motion)
-INPUT_DIM = 126    # 21 landmarks * 3 coords * 2 hands
+SEQ_LEN = 30       # INCREASED: Look at 30 continuous frames (1 full second of motion)
+INPUT_DIM = 128    # INCREASED: 126 (coords) + 2 (hand-to-hand distances)
 HIDDEN_DIM = 64    # Lightweight hidden layer for fast CPU inference
 NUM_CLASSES = 7
 BATCH_SIZE = 64
@@ -35,6 +35,8 @@ def extract_features_from_image(image_path):
 
     sorted_hands = sorted(results.multi_hand_landmarks, key=lambda h: h.landmark[0].x)
     features = []
+    
+    # 1. Extract standard normalized coordinates for up to 2 hands
     for hand in sorted_hands[:2]:
         wrist = hand.landmark[0]
         middle_base = hand.landmark[9]
@@ -47,15 +49,49 @@ def extract_features_from_image(image_path):
                 (lm.y - wrist.y) / hand_size,
                 (lm.z - wrist.z) / hand_size
             ])
-    while len(features) < INPUT_DIM:
+            
+    # Pad coordinate features if only 1 hand is visible to reach 126
+    while len(features) < 126:
         features.append(0.0)
+        
+    # 2. Extract Relative Distance Features (Crucial for WHO steps)
+    if len(sorted_hands) == 2:
+        h1_wrist = sorted_hands[0].landmark[0]
+        h2_wrist = sorted_hands[1].landmark[0]
+        wrist_dist = math.hypot(h1_wrist.x - h2_wrist.x, h1_wrist.y - h2_wrist.y)
+        
+        h1_index = sorted_hands[0].landmark[8]
+        h2_index = sorted_hands[1].landmark[8]
+        index_dist = math.hypot(h1_index.x - h2_index.x, h1_index.y - h2_index.y)
+        
+        features.extend([wrist_dist, index_dist])
+    else:
+        # If only one hand, apply maximum distance penalty (1.0 is max normalized space)
+        features.extend([1.0, 1.0])
+        
     return features
 
-# --- PYTORCH LSTM ARCHITECTURE ---
-class HandwashLSTM(nn.Module):
+# --- PYTORCH CNN + LSTM ARCHITECTURE ---
+class HandwashCNN_LSTM(nn.Module):
     def __init__(self, input_dim=INPUT_DIM, hidden_dim=HIDDEN_DIM, num_classes=NUM_CLASSES):
-        super(HandwashLSTM, self).__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers=2, batch_first=True, dropout=0.2)
+        super(HandwashCNN_LSTM, self).__init__()
+        
+        # 1D CNN explicitly designed to find local velocity/acceleration between frames
+        self.conv1d = nn.Conv1d(
+            in_channels=input_dim, 
+            out_channels=hidden_dim, 
+            kernel_size=3, 
+            padding=1
+        )
+        
+        self.lstm = nn.LSTM(
+            input_size=hidden_dim, 
+            hidden_size=hidden_dim, 
+            num_layers=2, 
+            batch_first=True, 
+            dropout=0.2
+        )
+        
         self.fc = nn.Sequential(
             nn.Linear(hidden_dim, 32),
             nn.ReLU(),
@@ -63,9 +99,21 @@ class HandwashLSTM(nn.Module):
         )
 
     def forward(self, x):
-        # x shape: (batch_size, seq_len, input_dim)
+        # Incoming x shape: (batch_size, seq_len, input_dim)
+        
+        # 1. Prepare for Conv1D: PyTorch Conv1d expects (batch_size, channels, sequence_length)
+        x = x.permute(0, 2, 1) 
+        
+        # 2. Apply Conv1D + Activation
+        x = torch.relu(self.conv1d(x))
+        
+        # 3. Prepare for LSTM: Revert shape to (batch_size, sequence_length, channels)
+        x = x.permute(0, 2, 1)
+        
+        # 4. Standard LSTM processing
         out, (hn, cn) = self.lstm(x)
-        # Take the output of the very last timestep in the sequence
+        
+        # 5. Take the output of the very last timestep
         last_out = out[:, -1, :]
         return self.fc(last_out)
 
@@ -101,14 +149,13 @@ def main():
                 class_data[class_id][snippet_id].append((frame_num, features))
     hands.close()
 
-    # --- BUILD TEMPORAL SLIDING WINDOWS (SEQ_LEN = 15) ---
+    # --- BUILD TEMPORAL SLIDING WINDOWS ---
     print(f"\n[INFO] Building {SEQ_LEN}-Frame Time Sequences...")
     X_seq, y_seq = [], []
 
     for class_id, snippets in class_data.items():
         for snippet_id, frames in snippets.items():
             frames.sort(key=lambda x: x[0])
-            # Create sliding windows of 15 consecutive frames
             for i in range(len(frames) - SEQ_LEN + 1):
                 window = [f[1] for f in frames[i : i + SEQ_LEN]]
                 X_seq.append(window)
@@ -121,12 +168,13 @@ def main():
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[INFO] Training LSTM on device: {device}...")
+    print(f"[INFO] Training CNN-LSTM on device: {device}...")
 
     train_loader = DataLoader(SequenceDataset(X_train, y_train), batch_size=BATCH_SIZE, shuffle=True)
     test_loader = DataLoader(SequenceDataset(X_test, y_test), batch_size=BATCH_SIZE, shuffle=False)
 
-    model = HandwashLSTM().to(device)
+    # Instantiate the new CNN-LSTM architecture
+    model = HandwashCNN_LSTM().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
@@ -143,7 +191,6 @@ def main():
             optimizer.step()
             total_loss += loss.item()
 
-        # Evaluate Accuracy every 5 epochs
         if (epoch + 1) % 5 == 0 or epoch == EPOCHS - 1:
             model.eval()
             all_preds, all_targets = [], []
@@ -156,10 +203,13 @@ def main():
             acc = accuracy_score(all_targets, all_preds)
             print(f"  Epoch [{epoch+1}/{EPOCHS}] | Loss: {total_loss/len(train_loader):.4f} | Test Acc: {acc*100:.2f}%")
 
-    # --- EXPORT TO ULTRA-FAST ONNX FOR CPU INFERENCE ---
-    print(f"\n[INFO] Exporting LSTM to ONNX format ({ONNX_SAVE_PATH})...")
+    # --- EXPORT TO ONNX ---
+    print(f"\n[INFO] Exporting CNN-LSTM to ONNX format ({ONNX_SAVE_PATH})...")
     model.eval().to("cpu")
+    
+    # Notice the dummy input uses the new SEQ_LEN (30) and INPUT_DIM (128)
     dummy_input = torch.randn(1, SEQ_LEN, INPUT_DIM)
+    
     torch.onnx.export(
         model,
         dummy_input,

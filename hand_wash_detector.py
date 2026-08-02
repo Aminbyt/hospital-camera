@@ -5,6 +5,7 @@ import math
 import cv2
 import config
 import logging
+import numpy as np
 
 class HandWashDetector:
     def __init__(self):
@@ -17,17 +18,15 @@ class HandWashDetector:
         self.is_washing = False
         self.last_valid_wash_time = 0.0
         self.prev_hand_pts = None
-       
         self.last_move_time = 0.0
-       
         self.scrub_anchor_pos = None
         self.scrub_bubble_radius = 200
-
         self.last_mask_seen_time = 0
         self.last_hat_seen_time = 0
-        self.who_paused = False  # <-- NEW: Tracks if paused by WHO model
+        self.who_paused = False  
         self.completed_steps = set()
-
+       
+ 
     def extract_hand_points(self, hand_landmarks, frame_w, frame_h):
         hand0 = hand_landmarks
         return [
