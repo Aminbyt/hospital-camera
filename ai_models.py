@@ -175,7 +175,9 @@ class AIModels:
 
         # --- LOAD WHO HANDWASHING GESTURE CLASSIFIER ---
         self.who_session = None
-        model_path = "who_cnn_lstm_model.onnx"
+        # Make sure this filename matches your converted .onnx file!
+        model_path = "pskus_videosfinal_model.onnx"
+       
         if os.path.exists(model_path):
             try:
                 import onnxruntime as ort
@@ -184,19 +186,15 @@ class AIModels:
                     providers=['CPUExecutionProvider']
                 )
                 self.who_input_name = self.who_session.get_inputs()[0].name
-                print("✅ WHO Handwashing LSTM Neural Network loaded successfully!")
+                print("✅ MobileNetV2 + GRU Handwashing ONNX Model loaded successfully!")
             except Exception as e:
-                print(f"❌ Could not load who_lstm_model.onnx: {e}")
+                print(f"❌ Could not load pskus_videosfinal_model.onnx: {e}")
         else:
-            print("⚠️ who_lstm_model.onnx not found. WHO gesture classification disabled.")
+            print("⚠️ pskus_videosfinal_model.onnx not found. WHO gesture classification disabled.")
 
-        # --- TEMPORAL SMOOTHING BUFFERS ---
-        # Stores the last 45 frame predictions (~1.5 seconds) for smooth UI voting
-        self.prediction_buffer = deque(maxlen=45)
-       
-        # <-- NEW: Stores a rolling window of 15 frames of hand coordinates for the LSTM
-        self.lstm_sequence_buffer = deque(maxlen=30)
-
+        # Temporal buffers
+        self.prediction_buffer = deque(maxlen=45)     # Smooths UI step flickering
+        self.frame_crop_queue = deque(maxlen=5)      # Stores rolling 5 RGB hand crops (224x224)
         initialize_face_engine(config.REG_PATH)
 
     def detect_ppe(self, frame):
@@ -266,61 +264,49 @@ class AIModels:
                    box1[3] < box2[1] or box1[1] > box2[3])
 
     # --- NEW METHODS FOR WHO STEP PREDICTION & SMOOTHING ---
-    def predict_who_step(self, hand_landmarks_data):
+    def predict_who_step(self, frame_rgb, hand_landmarks_data):
         if not self.who_session or not hand_landmarks_data or not hand_landmarks_data.multi_hand_landmarks:
-            self.lstm_sequence_buffer.clear()
-            return 0
-           
-        sorted_hands = sorted(
-            hand_landmarks_data.multi_hand_landmarks, key=lambda h: h.landmark[0].x
-        )
-       
-        current_features = []
-        for hand in sorted_hands[:2]:
-            wrist = hand.landmark[0]
-            middle_base = hand.landmark[9]
-           
-            import math
-            hand_size = math.hypot(wrist.x - middle_base.x, wrist.y - middle_base.y)
-            if hand_size == 0: hand_size = 1.0
-           
-            for lm in hand.landmark:
-                current_features.extend([
-                    (lm.x - wrist.x) / hand_size,
-                    (lm.y - wrist.y) / hand_size,
-                    (lm.z - wrist.z) / hand_size
-                ])
-               
-        while len(current_features) < 126:
-            current_features.append(0.0)
+            return getattr(self, 'last_stable_step', 0)
 
-        # --- NEW: ADD HAND-TO-HAND DISTANCE (128 Dims) ---
-        if len(sorted_hands) == 2:
-            h1_w, h2_w = sorted_hands[0].landmark[0], sorted_hands[1].landmark[0]
-            current_features.append(math.hypot(h1_w.x - h2_w.x, h1_w.y - h2_w.y))
-           
-            h1_i, h2_i = sorted_hands[0].landmark[8], sorted_hands[1].landmark[8]
-            current_features.append(math.hypot(h1_i.x - h2_i.x, h1_i.y - h2_i.y))
-        else:
-            current_features.extend([1.0, 1.0])
-           
-        # --- ADD TO LSTM 30-FRAME TIME SEQUENCE ---
-        self.lstm_sequence_buffer.append(current_features)
+        # 1. NO CROPPING: Use the full frame exactly like the PSKUS training data!
+        # Resize the entire frame to 224x224 and normalize to [-1.0, 1.0]
+        frame_resized = cv2.resize(frame_rgb, (224, 224))
+        frame_norm = (frame_resized.astype(np.float32) / 127.5) - 1.0
+
+        # Initialize queues safely
+        if not hasattr(self, 'frame_crop_queue') or self.frame_crop_queue.maxlen != 5:
+            self.frame_crop_queue = deque(maxlen=5)
+
+        # 2. MATCH TRAINING TIME: Sample every 6th frame (1 full second of motion)
+        self.frame_stride_counter = getattr(self, 'frame_stride_counter', 0) + 1
+        if self.frame_stride_counter % 6 == 0:
+            self.frame_crop_queue.append(frame_norm)
+
+        # Wait until we have 5 frames in the queue
+        if len(self.frame_crop_queue) < 5:
+            return getattr(self, 'last_stable_step', 0)
+
+        # 3. Build ONNX Input Tensor: Shape (1, 5, 224, 224, 3)
+        input_tensor = np.expand_dims(np.array(self.frame_crop_queue, dtype=np.float32), axis=0)
+
+        # 4. Run ONNX Model Inference
+        probs = self.who_session.run(None, {self.who_input_name: input_tensor})[0][0]
        
-        # Wait for 1 full second of motion before predicting
-        if len(self.lstm_sequence_buffer) < 30:
-            return 0
-           
-        # Convert deque to shape (1, 30, 128) float32 numpy array
-        seq_array = np.array([list(self.lstm_sequence_buffer)], dtype=np.float32)
-       
-        logits = self.who_session.run(None, {self.who_input_name: seq_array})[0]
-        pred = int(np.argmax(logits, axis=1)[0])
-       
-        self.prediction_buffer.append(pred)
+        raw_pred = int(np.argmax(probs))
+        confidence = float(probs[raw_pred]) * 100
+
+        # 5. Smooth UI with a 5-vote rolling buffer
+        if not hasattr(self, 'prediction_buffer') or self.prediction_buffer.maxlen != 5:
+            self.prediction_buffer = deque(maxlen=5)
+
+        self.prediction_buffer.append(raw_pred)
         most_common = Counter(self.prediction_buffer).most_common(1)[0][0]
-        return most_common
+        self.last_stable_step = most_common
 
+        # --- LIVE TERMINAL DIAGNOSTIC LOG ---
+        print(f"[AI DEBUG] Raw Pred: Step {raw_pred} ({confidence:.1f}%) | Smoothed: Step {most_common} | Queue: {len(self.frame_crop_queue)}/5")
+
+        return most_common
 
     def get_smoothed_step(self):
         """Returns the most common prediction from the last 15 frames."""
@@ -330,9 +316,13 @@ class AIModels:
         return most_common_step
 
     def clear_buffer(self):
-        """Resets the rolling vote when hands leave the sink or stop washing."""
-        self.prediction_buffer.clear()
-    # -------------------------------------------------------
+        """Resets buffers when hands leave the sink area."""
+        if hasattr(self, 'frame_crop_queue'):
+            self.frame_crop_queue.clear()
+        if hasattr(self, 'prediction_buffer'):
+            self.prediction_buffer.clear()
+        self.last_stable_step = 0
+
 
     def cleanup(self):
         self.hands.close()

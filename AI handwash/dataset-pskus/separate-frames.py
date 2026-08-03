@@ -18,8 +18,8 @@ import random
 
 # Change these directories to your own locations
 input_folder = '.'
-output_folder = './PSKUS_dataset/frames/'
-video_output_folder = './PSKUS_dataset/videos/'
+output_folder = './PSKUS_dataset_preprocessed/frames/'
+video_output_folder = './PSKUS_dataset_preprocessed/videos/'
 
 snippet_extraction_file = "create_snippets.sh"
 
@@ -62,6 +62,7 @@ def majority_vote(lst):
 
 def mk(directory):
     os.makedirs(directory,exist_ok=True)
+
 def discount_reaction_indeterminacy(labels):
     new_labels = [u for u in labels]
     n = len(labels) - 1
@@ -116,8 +117,9 @@ def find_frame_labels(fullpath):
                 annotations.append(a_annotations)
 
     num_annotators = len(annotations)
-    if num_annotators ==0:
-        return [],[] ,[],0
+    if num_annotators == 0:
+        return [],[],[],0
+    
     num_frames = len(annotations[0])
     is_washing = []
     codes = []
@@ -279,7 +281,7 @@ def main():
 
     testfiles = set()
     trainvalfiles = set()
-    with open(os.path.join(input_folder, 'statistics-with-locations.csv'),mode='r' , encoding='utf-8') as csv_file:
+    with open(os.path.join(input_folder, 'statistics-with-locations.csv'),encoding='utf-8') as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=',')
 
         for row in csv_reader:

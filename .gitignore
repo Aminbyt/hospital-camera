@@ -13,6 +13,7 @@ env/
 
 # AI Weights and Datasets (Crucial: Keep GitHub repo lightweight)
 *.pt
+*.sh
 *.onnx
 *.engine
 runs/
@@ -23,6 +24,7 @@ data_1/
 data_2/
 medical_env/
 exe_env/
+train_env/
 AI handwash/dataset-pskus/DataSet1/
 AI handwash/dataset-pskus/DataSet2/
 AI handwash/dataset-pskus/DataSet3/
@@ -35,7 +37,15 @@ AI handwash/dataset-pskus/DataSet9/
 AI handwash/dataset-pskus/DataSet10/
 AI handwash/dataset-pskus/DataSet11/
 AI handwash/dataset-pskus/PSKUS_dataset/
+AI handwash/dataset-pskus/
 
+AI handwash/dataset-pskus/PSKUS_dataset_preprocessed/
+AI handwash/dataset-pskus/PSKUS_dataset_who/
+AI handwash/handwash-master/
+
+*pskus_videosfinal_model.h5
+*get-and-preprocess-dataset.sh
+*create_snippets.sh
 *who_rf_model.pkl
 *who_xgb_model.pkl
 *who_lstm_model.onnx
