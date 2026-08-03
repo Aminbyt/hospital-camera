@@ -1,3 +1,4 @@
+"""Updated WHO LSTM Training Script - RTMPose Version"""
 import os
 import glob
 import math
@@ -6,34 +7,64 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
-import mediapipe as mp
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 from collections import defaultdict
 
+# --- NEW: IMPORT RTMPOSE INSTEAD OF MEDIAPIPE ---
+from rtmlib import Hand # <-- FIXED IMPORT
+
 # --- CONFIGURATION ---
 FRAMES_DIR = "./AI handwash/dataset-pskus/PSKUS_dataset/frames/trainval"
-ONNX_SAVE_PATH = "who_cnn_lstm_model.onnx"
+ONNX_SAVE_PATH = "who_rtm_lstm_model.onnx"
 MAX_SAMPLES_PER_CLASS = 15000
-SEQ_LEN = 30       # INCREASED: Look at 30 continuous frames (1 full second of motion)
-INPUT_DIM = 128    # INCREASED: 126 (coords) + 2 (hand-to-hand distances)
+SEQ_LEN = 30       # 30 continuous frames (1 full second of motion)
+INPUT_DIM = 128    # 126 (coords) + 2 (hand-to-hand distances)
 HIDDEN_DIM = 64    # Lightweight hidden layer for fast CPU inference
 NUM_CLASSES = 7
 BATCH_SIZE = 64
 EPOCHS = 25
 
-# --- MEDIAPIPE INITIALIZATION ---
-mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.5)
+# --- RTMPOSE INITIALIZATION ---
+print("[INFO] Loading RTMPose Hand Tracker...")
+hand_tracker = Hand(  # <-- FIXED INITIALIZATION
+    mode='lightweight',
+    backend='onnxruntime',
+    device='cuda'
+)
 
 def extract_features_from_image(image_path):
     img = cv2.imread(image_path)
     if img is None: return None
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    results = hands.process(img_rgb)
-    if not results.multi_hand_landmarks: return None
+    
+    # RTMPose uses BGR natively, no need to convert to RGB!
+    keypoints, scores = hand_tracker(img) # <-- FIXED API CALL
+    
+    if keypoints is None or len(keypoints) == 0:
+        return None
+        
+    frame_h, frame_w = img.shape[:2]
+    
+    # Create mock objects to match the 128-feature extraction logic
+    class MockLandmark:
+        def __init__(self, x, y):
+            self.x = x
+            self.y = y
+            self.z = 0.0
 
-    sorted_hands = sorted(results.multi_hand_landmarks, key=lambda h: h.landmark[0].x)
+    class MockHand:
+        def __init__(self, kp):
+            self.landmark = [MockLandmark(pt[0]/frame_w, pt[1]/frame_h) for pt in kp]
+            
+    hands_list = []
+    for kp in keypoints:
+        if len(kp) == 21:
+            hands_list.append(MockHand(kp))
+            
+    if not hands_list:
+        return None
+
+    sorted_hands = sorted(hands_list, key=lambda h: h.landmark[0].x)
     features = []
     
     # 1. Extract standard normalized coordinates for up to 2 hands
@@ -71,12 +102,12 @@ def extract_features_from_image(image_path):
         
     return features
 
+
 # --- PYTORCH CNN + LSTM ARCHITECTURE ---
 class HandwashCNN_LSTM(nn.Module):
     def __init__(self, input_dim=INPUT_DIM, hidden_dim=HIDDEN_DIM, num_classes=NUM_CLASSES):
         super(HandwashCNN_LSTM, self).__init__()
         
-        # 1D CNN explicitly designed to find local velocity/acceleration between frames
         self.conv1d = nn.Conv1d(
             in_channels=input_dim, 
             out_channels=hidden_dim, 
@@ -99,23 +130,13 @@ class HandwashCNN_LSTM(nn.Module):
         )
 
     def forward(self, x):
-        # Incoming x shape: (batch_size, seq_len, input_dim)
-        
-        # 1. Prepare for Conv1D: PyTorch Conv1d expects (batch_size, channels, sequence_length)
         x = x.permute(0, 2, 1) 
-        
-        # 2. Apply Conv1D + Activation
         x = torch.relu(self.conv1d(x))
-        
-        # 3. Prepare for LSTM: Revert shape to (batch_size, sequence_length, channels)
         x = x.permute(0, 2, 1)
-        
-        # 4. Standard LSTM processing
         out, (hn, cn) = self.lstm(x)
-        
-        # 5. Take the output of the very last timestep
         last_out = out[:, -1, :]
         return self.fc(last_out)
+
 
 class SequenceDataset(Dataset):
     def __init__(self, X, y):
@@ -126,17 +147,22 @@ class SequenceDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
+
 def main():
-    print("[INFO] Starting Sequential Feature Extraction...")
+    print("[INFO] Starting Sequential Feature Extraction with RTMPose...")
     class_data = defaultdict(lambda: defaultdict(list))
+   
+    # 1. ADD THIS IMPORT HERE
+    from tqdm import tqdm
 
     for class_id in range(7):
         folder_path = os.path.join(FRAMES_DIR, str(class_id))
         if not os.path.exists(folder_path): continue
         images = glob.glob(os.path.join(folder_path, "*.jpg"))[:MAX_SAMPLES_PER_CLASS]
-        print(f" -> Processing Class {class_id}: {len(images)} frames...")
+        print(f"\n -> Processing Class {class_id}: {len(images)} frames...")
 
-        for img_path in images:
+        # 2. WRAP 'images' WITH tqdm() LIKE THIS:
+        for img_path in tqdm(images, desc=f"Class {class_id}", unit="frame"):
             basename = os.path.basename(img_path).replace(".jpg", "")
             parts = basename.split("_")
             try:
@@ -147,7 +173,6 @@ def main():
             features = extract_features_from_image(img_path)
             if features:
                 class_data[class_id][snippet_id].append((frame_num, features))
-    hands.close()
 
     # --- BUILD TEMPORAL SLIDING WINDOWS ---
     print(f"\n[INFO] Building {SEQ_LEN}-Frame Time Sequences...")
@@ -173,7 +198,6 @@ def main():
     train_loader = DataLoader(SequenceDataset(X_train, y_train), batch_size=BATCH_SIZE, shuffle=True)
     test_loader = DataLoader(SequenceDataset(X_test, y_test), batch_size=BATCH_SIZE, shuffle=False)
 
-    # Instantiate the new CNN-LSTM architecture
     model = HandwashCNN_LSTM().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
@@ -207,7 +231,6 @@ def main():
     print(f"\n[INFO] Exporting CNN-LSTM to ONNX format ({ONNX_SAVE_PATH})...")
     model.eval().to("cpu")
     
-    # Notice the dummy input uses the new SEQ_LEN (30) and INPUT_DIM (128)
     dummy_input = torch.randn(1, SEQ_LEN, INPUT_DIM)
     
     torch.onnx.export(

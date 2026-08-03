@@ -10,12 +10,7 @@ import math
 import mediapipe as mp
 import threading
 from PyQt5.QtCore import QThread, pyqtSignal
-
-# --- NEW IMPORTS FOR WHO GESTURE CLASSIFIER ---
-import joblib
-import pandas as pd
 from collections import Counter, deque
-# ----------------------------------------------
 
 # --- PYINSTALLER DLL SECURITY FIX ---
 if getattr(sys, 'frozen', False):
@@ -24,7 +19,8 @@ if getattr(sys, 'frozen', False):
 # --- GLOBAL AI CACHE & MUTEX LOCK ---
 GLOBAL_INSIGHT_APP = None
 GLOBAL_DB_EMBEDDINGS = {}
-FACE_LOCK = threading.Lock()  # <-- PREVENTS ONNX RUNTIME C++ COLLISION DEADLOCKS!
+FACE_LOCK = threading.Lock()  # PREVENTS ONNX RUNTIME C++ COLLISION DEADLOCKS!
+
 
 def initialize_face_engine(db_path):
     """Initializes InsightFace and loads staff photo embeddings ONCE at system boot!"""
@@ -79,16 +75,15 @@ def reset_face_cache():
         initialize_face_engine(config.REG_PATH)
     print("[INFO] Face cache reloaded with newly registered staff photos!")
 
+
 def add_single_face_to_cache(person_name, img_path):
     """Instantly adds a single new photo to RAM without rebuilding the whole database."""
     global GLOBAL_INSIGHT_APP, GLOBAL_DB_EMBEDDINGS
    
     with FACE_LOCK:
-        # 1. If this is a brand new person, create an empty list for them
         if person_name not in GLOBAL_DB_EMBEDDINGS:
             GLOBAL_DB_EMBEDDINGS[person_name] = []
            
-        # 2. Read and process ONLY the newly captured image
         db_img = cv2.imread(img_path)
         if db_img is not None:
             faces = GLOBAL_INSIGHT_APP.get(db_img)
@@ -96,11 +91,12 @@ def add_single_face_to_cache(person_name, img_path):
                 GLOBAL_DB_EMBEDDINGS[person_name].append(faces[0].normed_embedding)
                 print(f"[INFO] Instantly injected new angle for {person_name} into RAM!")
 
+
 def recognize_face_sync(frame_to_check, db_path=config.REG_PATH):
     """Thread-safe synchronous face recognition using a global mutex lock."""
     global GLOBAL_INSIGHT_APP, GLOBAL_DB_EMBEDDINGS
    
-    with FACE_LOCK:  # <-- Guarantees only ONE camera accesses ONNX Runtime at a time!
+    with FACE_LOCK:
         try:
             if GLOBAL_INSIGHT_APP is None or not GLOBAL_DB_EMBEDDINGS:
                 initialize_face_engine(db_path)
@@ -108,7 +104,6 @@ def recognize_face_sync(frame_to_check, db_path=config.REG_PATH):
             if not GLOBAL_DB_EMBEDDINGS:
                 return "UNKNOWN"
 
-            # 1. Detect Live Face safely inside the lock
             faces = GLOBAL_INSIGHT_APP.get(frame_to_check)
             if not faces:
                 return "NO_FACE"
@@ -117,7 +112,6 @@ def recognize_face_sync(frame_to_check, db_path=config.REG_PATH):
             best_match = "UNKNOWN"
             min_dist = 1.0  
 
-            # 2. Compare live face against ALL saved angles in RAM
             for name, embeddings_list in GLOBAL_DB_EMBEDDINGS.items():
                 for saved_embedding in embeddings_list:
                     dist = np.sum(np.square(detected_face.normed_embedding - saved_embedding))
@@ -155,12 +149,14 @@ class AIModels:
         print("[DEBUG] Loading YOLOv8 Model...")
         self.yolo_model = YOLO(config.YOLO_MODEL_PATH)
 
-        print("[DEBUG] Loading MediaPipe Hands...")
+        print("[DEBUG] Loading High-Speed MediaPipe Hands...")
         self.mp_hands = mp.solutions.hands
         self.hands = self.mp_hands.Hands(
-            max_num_hands=config.MAX_NUM_HANDS,
-            min_detection_confidence=config.HAND_DETECTION_CONFIDENCE,
-            min_tracking_confidence=config.HAND_TRACKING_CONFIDENCE
+            static_image_mode=False,
+            max_num_hands=2,
+            model_complexity=1,
+            min_detection_confidence=0.3,
+            min_tracking_confidence=0.3
         )
         self.mp_draw = mp.solutions.drawing_utils
 
@@ -175,8 +171,16 @@ class AIModels:
 
         # --- LOAD WHO HANDWASHING GESTURE CLASSIFIER ---
         self.who_session = None
-        model_path = "who_cnn_lstm_model.onnx"
-        if os.path.exists(model_path):
+        
+        # Check for available model versions
+        possible_models = ["who_cnn_lstm_model.onnx", "who_rtm_lstm_model.onnx", "who_lstm_model.onnx"]
+        model_path = None
+        for m in possible_models:
+            if os.path.exists(m):
+                model_path = m
+                break
+
+        if model_path:
             try:
                 import onnxruntime as ort
                 self.who_session = ort.InferenceSession(
@@ -184,17 +188,14 @@ class AIModels:
                     providers=['CPUExecutionProvider']
                 )
                 self.who_input_name = self.who_session.get_inputs()[0].name
-                print("✅ WHO Handwashing LSTM Neural Network loaded successfully!")
+                print(f"✅ WHO Handwashing Neural Network ({model_path}) loaded successfully!")
             except Exception as e:
-                print(f"❌ Could not load who_lstm_model.onnx: {e}")
+                print(f"❌ Could not load {model_path}: {e}")
         else:
-            print("⚠️ who_lstm_model.onnx not found. WHO gesture classification disabled.")
+            print("⚠️ No WHO model found on disk. WHO gesture classification disabled.")
 
         # --- TEMPORAL SMOOTHING BUFFERS ---
-        # Stores the last 45 frame predictions (~1.5 seconds) for smooth UI voting
         self.prediction_buffer = deque(maxlen=45)
-       
-        # <-- NEW: Stores a rolling window of 15 frames of hand coordinates for the LSTM
         self.lstm_sequence_buffer = deque(maxlen=30)
 
         initialize_face_engine(config.REG_PATH)
@@ -229,7 +230,6 @@ class AIModels:
         return frame, has_mask, has_hat
 
     def detect_face(self, frame_rgb):
-        # This remains your "Gatekeeper" - lightweight and fast
         face_results = self.face_detector.process(frame_rgb)
         if not face_results.detections: return False
 
@@ -248,7 +248,7 @@ class AIModels:
         }
 
     def draw_hand_landmarks(self, frame, hand_results):
-        if hand_results.multi_hand_landmarks:
+        if hand_results and hasattr(hand_results, 'multi_hand_landmarks') and hand_results.multi_hand_landmarks:
             for hand_landmarks in hand_results.multi_hand_landmarks:
                 self.mp_draw.draw_landmarks(frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
         return frame
@@ -265,7 +265,6 @@ class AIModels:
         return not (box1[2] < box2[0] or box1[0] > box2[2] or 
                    box1[3] < box2[1] or box1[1] > box2[3])
 
-    # --- NEW METHODS FOR WHO STEP PREDICTION & SMOOTHING ---
     def predict_who_step(self, hand_landmarks_data):
         if not self.who_session or not hand_landmarks_data or not hand_landmarks_data.multi_hand_landmarks:
             self.lstm_sequence_buffer.clear()
@@ -280,7 +279,6 @@ class AIModels:
             wrist = hand.landmark[0]
             middle_base = hand.landmark[9]
            
-            import math
             hand_size = math.hypot(wrist.x - middle_base.x, wrist.y - middle_base.y)
             if hand_size == 0: hand_size = 1.0
            
@@ -294,7 +292,7 @@ class AIModels:
         while len(current_features) < 126:
             current_features.append(0.0)
 
-        # --- NEW: ADD HAND-TO-HAND DISTANCE (128 Dims) ---
+        # 128-Dimension Feature Vector (126 coordinates + 2 distances)
         if len(sorted_hands) == 2:
             h1_w, h2_w = sorted_hands[0].landmark[0], sorted_hands[1].landmark[0]
             current_features.append(math.hypot(h1_w.x - h2_w.x, h1_w.y - h2_w.y))
@@ -304,14 +302,11 @@ class AIModels:
         else:
             current_features.extend([1.0, 1.0])
            
-        # --- ADD TO LSTM 30-FRAME TIME SEQUENCE ---
         self.lstm_sequence_buffer.append(current_features)
        
-        # Wait for 1 full second of motion before predicting
         if len(self.lstm_sequence_buffer) < 30:
             return 0
            
-        # Convert deque to shape (1, 30, 128) float32 numpy array
         seq_array = np.array([list(self.lstm_sequence_buffer)], dtype=np.float32)
        
         logits = self.who_session.run(None, {self.who_input_name: seq_array})[0]
@@ -320,7 +315,6 @@ class AIModels:
         self.prediction_buffer.append(pred)
         most_common = Counter(self.prediction_buffer).most_common(1)[0][0]
         return most_common
-
 
     def get_smoothed_step(self):
         """Returns the most common prediction from the last 15 frames."""
@@ -332,7 +326,6 @@ class AIModels:
     def clear_buffer(self):
         """Resets the rolling vote when hands leave the sink or stop washing."""
         self.prediction_buffer.clear()
-    # -------------------------------------------------------
 
     def cleanup(self):
         self.hands.close()

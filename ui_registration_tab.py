@@ -10,7 +10,7 @@ from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QFont, QImage, QPixmap
 import config
 from data_logger import DataLogger
-from ai_models import reset_face_cache ,add_single_face_to_cache
+from ai_models import add_single_face_to_cache
 class RegistrationTab(QWidget):
     """Registration tab for adding new staff members."""
 
