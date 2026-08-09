@@ -26,6 +26,8 @@ GLOBAL_INSIGHT_APP = None
 GLOBAL_DB_EMBEDDINGS = {}
 FACE_LOCK = threading.Lock()  # <-- PREVENTS ONNX RUNTIME C++ COLLISION DEADLOCKS!
 
+import pickle
+
 def initialize_face_engine(db_path):
     """Initializes InsightFace and loads staff photo embeddings ONCE at system boot!"""
     global GLOBAL_INSIGHT_APP, GLOBAL_DB_EMBEDDINGS
@@ -37,13 +39,25 @@ def initialize_face_engine(db_path):
             from insightface.app import FaceAnalysis
            
             GLOBAL_INSIGHT_APP = FaceAnalysis(providers=['CPUExecutionProvider'])
-            GLOBAL_INSIGHT_APP.prepare(ctx_id=0, det_size=(640, 640))
+            # Keeping the lowered threshold from our earlier fix!
+            GLOBAL_INSIGHT_APP.prepare(ctx_id=0, det_thresh=0.35, det_size=(640, 640))
             print("[INFO] InsightFace Engine initialized successfully!")
             print("[INFO] ==================================================\n")
 
         if not GLOBAL_DB_EMBEDDINGS and os.path.exists(db_path):
+            cache_path = os.path.join(config.DB_PATH, "face_cache.pkl")
+            
+            # --- 1. TRY TO LOAD MEMORY CACHE FIRST ---
+            if os.path.exists(cache_path):
+                print("\n[INFO] Loading face embeddings from high-speed cache...")
+                with open(cache_path, 'rb') as f:
+                    GLOBAL_DB_EMBEDDINGS = pickle.load(f)
+                print(f"[INFO] Loaded {len(GLOBAL_DB_EMBEDDINGS)} staff members instantly!\n")
+                return
+            
+            # --- 2. IF NO CACHE, BUILD IT (The slow loop) ---
             print("\n" + "="*55)
-            print("  🏥 HOSPITAL AI - ACTIVE STAFF FACE DATABASE:")
+            print("  🏥 HOSPITAL AI - BUILDING FACE DATABASE (First Time):")
             print("="*55)
             total_people = 0
             for person_name in sorted(os.listdir(db_path)):
@@ -59,6 +73,8 @@ def initialize_face_engine(db_path):
                                 faces = GLOBAL_INSIGHT_APP.get(db_img)
                                 if faces:
                                     GLOBAL_DB_EMBEDDINGS[person_name].append(faces[0].normed_embedding)
+                                else:
+                                    print(f"  [WARNING] Face completely missed in {img_name}! (Too blurry/dark)")
                    
                     angle_count = len(GLOBAL_DB_EMBEDDINGS[person_name])
                     if angle_count > 0:
@@ -67,6 +83,12 @@ def initialize_face_engine(db_path):
             print("="*55)
             print(f"  TOTAL REGISTERED STAFF: {total_people}")
             print("="*55 + "\n")
+            
+            # --- 3. SAVE TO MEMORY CACHE FOR NEXT BOOT ---
+            with open(cache_path, 'wb') as f:
+                pickle.dump(GLOBAL_DB_EMBEDDINGS, f)
+            print("[INFO] Face cache saved! Future start-ups will be instant.")
+            
     except Exception as e:
         print(f"[ERROR] Failed to initialize InsightFace engine: {e}")
 
@@ -76,25 +98,32 @@ def reset_face_cache():
     global GLOBAL_DB_EMBEDDINGS
     with FACE_LOCK:
         GLOBAL_DB_EMBEDDINGS = {}
+        cache_path = os.path.join(config.DB_PATH, "face_cache.pkl")
+        if os.path.exists(cache_path):
+            os.remove(cache_path)  
+            
         initialize_face_engine(config.REG_PATH)
-    print("[INFO] Face cache reloaded with newly registered staff photos!")
+    print("[INFO] Face cache reloaded and saved with newly registered staff photos!")
 
 def add_single_face_to_cache(person_name, img_path):
     """Instantly adds a single new photo to RAM without rebuilding the whole database."""
     global GLOBAL_INSIGHT_APP, GLOBAL_DB_EMBEDDINGS
    
     with FACE_LOCK:
-        # 1. If this is a brand new person, create an empty list for them
         if person_name not in GLOBAL_DB_EMBEDDINGS:
             GLOBAL_DB_EMBEDDINGS[person_name] = []
            
-        # 2. Read and process ONLY the newly captured image
         db_img = cv2.imread(img_path)
         if db_img is not None:
             faces = GLOBAL_INSIGHT_APP.get(db_img)
             if faces:
                 GLOBAL_DB_EMBEDDINGS[person_name].append(faces[0].normed_embedding)
                 print(f"[INFO] Instantly injected new angle for {person_name} into RAM!")
+                
+                # Resave the updated memory dictionary
+                cache_path = os.path.join(config.DB_PATH, "face_cache.pkl")
+                with open(cache_path, 'wb') as f:
+                    pickle.dump(GLOBAL_DB_EMBEDDINGS, f)
 
 def recognize_face_sync(frame_to_check, db_path=config.REG_PATH):
     """Thread-safe synchronous face recognition using a global mutex lock."""

@@ -12,8 +12,8 @@ from sink_calibration import SinkCalibration
 from data_logger import DataLogger, UserSessionManager
 from video_recorder import VideoRecorder
 
-class RTSPGrabber:
-    """A dedicated high-speed thread that constantly clears the network buffer."""
+class ZeroLatencyGrabber:
+    """A dedicated high-speed thread that constantly clears the camera buffer for BOTH IP and USB."""
     def __init__(self, src):
         self.src = src  
         self.ret = False
@@ -26,7 +26,13 @@ class RTSPGrabber:
         return self
 
     def update(self):
-        stream = cv2.VideoCapture(self.src)
+        if isinstance(self.src, int):
+            stream = cv2.VideoCapture(self.src, cv2.CAP_DSHOW)
+            stream.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        else:
+            stream = cv2.VideoCapture(self.src)
+            
         stream.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         while not self.stopped:
@@ -81,27 +87,17 @@ class CameraWorker(QThread):
     def run(self):
         """This runs continuously in the background!"""
         
-        if isinstance(self.camera_index, int):
-            self.video_stream = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
-            self.video_stream.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self.video_stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            is_rtsp = False
-        else:
-            logging.info(f"[INFO] Connecting to IP Camera: {self.sink_name} with Zero-Latency Grabber...")
-            self.video_stream = RTSPGrabber(self.camera_index).start()
-            is_rtsp = True
+        logging.info(f"[INFO] Connecting to Camera: {self.sink_name} with Zero-Latency Grabber...")
+        
+        # We start the universal grabber here for BOTH USB and IP cameras!
+        self.video_stream = ZeroLatencyGrabber(self.camera_index).start()       
 
         while self.running:
-            if is_rtsp:
-                ret, frame = self.video_stream.read()
-            else:
-                ret, frame = self.video_stream.read()
+            ret, frame = self.video_stream.read()
 
             if not ret or frame is None:
                 time.sleep(0.01)
                 continue
-
-            self.raw_frame_ready.emit(frame.copy())
 
             clean_record_frame = frame.copy()
 
@@ -124,7 +120,7 @@ class CameraWorker(QThread):
                         self.session_manager.is_authenticating = True
                         self.auth_message = "SCANNING FACE..."
                         self.auth_color = "warning"
-                       
+
                         # CALL SYNCHRONOUSLY WITH THREAD LOCK
                         auth_result = recognize_face_sync(frame.copy(), config.REG_PATH)
                         self.handle_auth_result(auth_result)
@@ -149,7 +145,7 @@ class CameraWorker(QThread):
            
             # THE MAGIC GATEKEEPER: Only run heavy YOLO math if someone looked at the camera and logged in!
             if self.session_manager.is_authenticated():
-               
+              
                 # 3. PPE DETECTION
                 if self.check_mask or self.check_hat:
                     frame, has_mask, has_hat = self.ai_models.detect_ppe(frame)
@@ -162,15 +158,15 @@ class CameraWorker(QThread):
                     )
                 
                     # ---> PREDICT LIVE WHO GESTURE FIRST <---
-                    current_who_step = 0
                     if wash_info['actively_washing']:
                         current_who_step = self.ai_models.predict_who_step(hand_results['hand_results'])
                     
-                        # GATE THE TIMER: Only add time if they are performing Steps 1-6!
-                        # If current_who_step == 0, is_valid_who_step is False, and the clock pauses.
                         is_valid_who_step = (current_who_step >= 1 and current_who_step <= 6)
-                        self.wash_detector.update_wash_time(is_valid_who_step)
+                        
+                        # ---> THE FIX: Timer now ticks up for ANY scrubbing, ignoring WHO validity <---
+                        self.wash_detector.update_wash_time(True)
 
+                        # But we still quietly track the WHO steps for the final Bot report!
                         if is_valid_who_step:
                             self.wash_detector.completed_steps.add(current_who_step)
                     
@@ -200,7 +196,7 @@ class CameraWorker(QThread):
                 else:
                     self.wash_detector.update_wash_time(False)
                     self.ai_models.clear_buffer()
-           
+            
             else:
                 self.wash_detector.reset_state()
                 self.ai_models.clear_buffer()
@@ -240,10 +236,8 @@ class CameraWorker(QThread):
             self.dashboard_data.emit(summary_data)
 
         # Cleanup when stopped
-        if is_rtsp:
-            self.video_stream.stop()
-        else:
-            self.video_stream.release()
+        self.video_stream.stop()
+
 
     def handle_auth_result(self, result):
         self.session_manager.is_authenticating = False
@@ -280,7 +274,7 @@ class CameraWorker(QThread):
             wash_status = "YES" if self.wash_detector.current_wash_time >= config.MIN_WASH_TIME else "NO"
             mask_status = "YES" if (self.session_manager.last_person_seen_time - self.wash_detector.last_mask_seen_time) <= 3.0 else "NO"
             hat_status = "YES" if (self.session_manager.last_person_seen_time - self.wash_detector.last_hat_seen_time) <= 3.0 else "NO"
-            all_steps = "YES" if len(self.wash_detector.completed_steps) >= 6 else "NO"
+            all_steps = "YES" if len(self.wash_detector.completed_steps) >= 4 else "NO"
 
             self.data_logger.log_and_notify(
                 self.session_manager.current_user,

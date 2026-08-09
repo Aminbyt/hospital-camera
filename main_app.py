@@ -82,7 +82,7 @@ from ui_registration_tab import RegistrationTab
 from ui_settings_tab import SettingsTab
 from camrea_worker import CameraWorker
 from sink_calibration import SinkCalibration, create_roi_dialog
-from send_daily_reports import DailyReportThread
+from send_daily_reports import DailyReportThread , MonthlyReportThread
 from heartbeat_worker import HeartbeatThread
 
 class ScrubSinkKiosk(QMainWindow):
@@ -220,6 +220,9 @@ class ScrubSinkKiosk(QMainWindow):
         self.report_thread =DailyReportThread()
         self.report_thread.start()
 
+        self.monthly_thread = MonthlyReportThread()
+        self.monthly_thread.start()
+
         self.heartbeat_thread = HeartbeatThread()
         self.heartbeat_thread.start()
 
@@ -251,6 +254,9 @@ class ScrubSinkKiosk(QMainWindow):
 
         if hasattr(self , "heartbeat_thread"):
             self.heartbeat_thread.stop()
+            
+        if hasattr(self, "monthly_thread"):
+            self.monthly_thread.stop()
             
         for worker in self.workers.values():
             worker.stop()
