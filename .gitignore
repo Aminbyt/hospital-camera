@@ -70,3 +70,10 @@ best_openvino_model/
 obj_train_data/
 images/
 labels/
+.env
+*.env
+face_cache.pkl
+*.log
+*.mp4
+*.xlsx
+__pycache__/
