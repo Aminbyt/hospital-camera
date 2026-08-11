@@ -253,10 +253,12 @@ class CameraWorker(QThread):
             has_any_face = getattr(self, 'cached_has_face', False)
 
             # --- 2. RATE-LIMITED HAND DETECTION (ONLY IF AUTHENTICATED) ---
+            new_hand_data = False
             if self.session_manager.is_authenticated():
                 if (now - getattr(self, 'last_hand_check', 0.0)) >= (1.0 / getattr(config, 'HAND_FPS', 12)):
                     self.cached_hand_results = self.ai_models.detect_hands(clean_rgb)
                     self.last_hand_check = now
+                    new_hand_data = True
             else:
                 self.cached_hand_results = {'detected': False, 'hand_results': None, 'count': 0}
                 
@@ -312,12 +314,18 @@ class CameraWorker(QThread):
                 
                     # ---> PREDICT LIVE WHO GESTURE FIRST <---
                     if wash_info['actively_washing']:
-                        current_who_step = self.ai_models.predict_who_step(hand_results['hand_results'])
-                        self.cached_who_step = current_who_step
+                        
+                        # --- FIX: Only push to the LSTM model if we have a FRESH moving hand frame! ---
+                        if new_hand_data:
+                            current_who_step = self.ai_models.predict_who_step(hand_results['hand_results'])
+                            self.cached_who_step = current_who_step
+                        else:
+                            current_who_step = getattr(self, 'cached_who_step', 0)
+                        # ------------------------------------------------------------------------------
                     
                         is_valid_who_step = (1 <= current_who_step <= 6)
                         
-                        # ---> THE FIX: Timer ticks up for ANY scrubbing, ignoring WHO validity <---
+                        # Timer ticks up for ANY scrubbing, ignoring WHO validity
                         self.wash_detector.update_wash_time(True)
 
                         # But we still quietly track the WHO steps for the final Bot report!

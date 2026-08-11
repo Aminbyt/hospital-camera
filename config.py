@@ -30,8 +30,8 @@ UI_FPS = 30
 # AI Inference Rates (Target FPS)
 FACE_FPS = 5
 PPE_FPS = 5
-HAND_FPS = 12
-WHO_FPS = 8
+HAND_FPS = 30
+WHO_FPS = 30
 
 # Queue Sizes
 FRAME_QUEUE_SIZE = 1
@@ -129,8 +129,7 @@ def get_sink_cameras():
                 continue
             
             # --- FIX: Match BOTH "SINK_1": 0 AND SINK_1=0 formats ---
-            match = re.search(r'["\']?(SINK_\d+)["\']?\s*[:=]\s*(.*)', line)
-            
+            match = re.search(r'["\']?(SINK_\d+)["\']?\s*[:=]\s*(.*)', line)            
             if match:
                 sink_name = match.group(1)
                 raw_val = match.group(2).strip()

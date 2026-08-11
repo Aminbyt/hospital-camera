@@ -265,21 +265,9 @@ class AIModelManager:
         if not self.who_session:
             return 0
         with self.who_lock:
-            # Get the raw predictions (logits) from the ONNX model
-            logits = self.who_session.run(None, {self.who_input_name: seq_array})[0][0]
-            
-            # --- NEW: Convert raw logits to percentages (Softmax) ---
-            exp_preds = np.exp(logits - np.max(logits))
-            probs = exp_preds / np.sum(exp_preds)
-            
-            best_class = int(np.argmax(probs))
-            confidence = probs[best_class]
-            
-            # If it is a WHO step (1-6) but confidence is below 80%, reject it!
-            if best_class != 0 and confidence < 0.80:
-                return 0 
-                
-            return best_class
+            # RESTORED FROM MAIN: Raw argmax, no strict softmax thresholds!
+            logits = self.who_session.run(None, {self.who_input_name: seq_array})[0]
+            return int(np.argmax(logits, axis=1)[0])
 
 # --- 3. BACKWARD COMPATIBILITY ALIASES ---
 
@@ -411,26 +399,19 @@ class PerSinkAIState:
         else:
             current_features.extend([1.0, 1.0])
            
-        # ALWAYS append the cheap features to maintain the 30-frame rolling history
-        now = time.time()
-        if (now - getattr(self, 'last_feature_time', 0.0)) >= 0.1:
-            self.lstm_sequence_buffer.append(current_features)
-            self.last_feature_time = now
+        # RESTORED FROM MAIN: Append without timers (handled in camrea_worker now)
+        self.lstm_sequence_buffer.append(current_features)
             
         if len(self.lstm_sequence_buffer) < 30:
             return self.last_stable_step
            
-        # --- RATE-LIMIT THE HEAVY ONNX INFERENCE ---
-        now = time.time()
-        if (now - self.last_who_time) >= (1.0 / getattr(config, 'WHO_FPS', 8)):
-            seq_array = np.array([list(self.lstm_sequence_buffer)], dtype=np.float32)
-            
-            # Execute inference
-            pred = self.manager.run_who_lstm(seq_array)
-            self.prediction_buffer.append(pred)
-            self.last_stable_step = Counter(self.prediction_buffer).most_common(1)[0][0]
-            self.last_who_time = now
-            
+        # --- EXECUTE ONNX INFERENCE ---
+        seq_array = np.array([list(self.lstm_sequence_buffer)], dtype=np.float32)
+        pred = self.manager.run_who_lstm(seq_array)
+        
+        self.prediction_buffer.append(pred)
+        self.last_stable_step = Counter(self.prediction_buffer).most_common(1)[0][0]
+        
         return self.last_stable_step
 
     def get_smoothed_step(self):
