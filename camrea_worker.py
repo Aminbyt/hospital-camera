@@ -253,12 +253,10 @@ class CameraWorker(QThread):
             has_any_face = getattr(self, 'cached_has_face', False)
 
             # --- 2. RATE-LIMITED HAND DETECTION (ONLY IF AUTHENTICATED) ---
-            new_hand_data = False
             if self.session_manager.is_authenticated():
                 if (now - getattr(self, 'last_hand_check', 0.0)) >= (1.0 / getattr(config, 'HAND_FPS', 12)):
                     self.cached_hand_results = self.ai_models.detect_hands(clean_rgb)
                     self.last_hand_check = now
-                    new_hand_data = True
             else:
                 self.cached_hand_results = {'detected': False, 'hand_results': None, 'count': 0}
                 
@@ -304,24 +302,20 @@ class CameraWorker(QThread):
                     frame, has_mask, has_hat = self.ai_models.detect_ppe(frame)
 
 # 4. HAND WASHING
+# 4. HAND WASHING
                 if self.check_wash and hand_results['detected']:
                     frame = self.ai_models.draw_hand_landmarks(frame, hand_results['hand_results'])
                     
-                    # --- RESTORED EXACT OLD LOGIC FROM MAIN BRANCH ---
                     wash_info = self.wash_detector.detect_washing(
                         hand_results, frame_w, frame_h, self.sink_y_start, self.ai_models
                     )
                 
                     # ---> PREDICT LIVE WHO GESTURE FIRST <---
                     if wash_info['actively_washing']:
+                        current_who_step = self.ai_models.predict_who_step(hand_results['hand_results'])
+                        self.cached_who_step = current_who_step
                         
-                        if new_hand_data:
-                            current_who_step = self.ai_models.predict_who_step(hand_results['hand_results'])
-                            self.cached_who_step = current_who_step
-                        else:
-                            current_who_step = getattr(self, 'cached_who_step', 0)
-                    
-                        is_valid_who_step = (1 <= current_who_step <= 6)
+                        is_valid_who_step = (current_who_step >= 1 and current_who_step <= 6)
                         
                         # Timer ticks up for ANY scrubbing, ignoring WHO validity
                         self.wash_detector.update_wash_time(True)
@@ -348,13 +342,13 @@ class CameraWorker(QThread):
                         cv2.putText(frame, label_text, (35, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (255, 255, 255), 2)
                     else:
                         self.wash_detector.update_wash_time(False)
-                        # --- FIX 3: DO NOT WIPE THE BUFFER ON FLICKERS! ---
+                        self.ai_models.clear_buffer()
                         self.cached_who_step = 0
                     
                     frame = self.wash_detector.draw_bubble_zone(frame)
                 else:
                     self.wash_detector.update_wash_time(False)
-                    # --- FIX 3: DO NOT WIPE THE BUFFER ON FLICKERS! ---
+                    self.ai_models.clear_buffer()
                     self.cached_who_step = 0
             # 5. DETERMINE MASTER STATUS
             master_ready = False

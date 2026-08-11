@@ -368,16 +368,21 @@ class PerSinkAIState:
                    box1[3] < box2[1] or box1[1] > box2[3])
 
     def predict_who_step(self, hand_landmarks_data):
-        if not hand_landmarks_data or not hand_landmarks_data.multi_hand_landmarks:
-            # FIX 1: Do NOT clear the buffer here! Just return the last known step.
-            return self.last_stable_step
+        # FIX: Ask the central manager for the session!
+        if not self.manager.who_session or not hand_landmarks_data or not hand_landmarks_data.multi_hand_landmarks:
+            self.lstm_sequence_buffer.clear()
+            return 0
            
-        sorted_hands = sorted(hand_landmarks_data.multi_hand_landmarks, key=lambda h: h.landmark[0].x)
+        sorted_hands = sorted(
+            hand_landmarks_data.multi_hand_landmarks, key=lambda h: h.landmark[0].x
+        )
+       
         current_features = []
-        
         for hand in sorted_hands[:2]:
             wrist = hand.landmark[0]
             middle_base = hand.landmark[9]
+           
+            import math
             hand_size = math.hypot(wrist.x - middle_base.x, wrist.y - middle_base.y)
             if hand_size == 0: hand_size = 1.0
            
@@ -391,29 +396,32 @@ class PerSinkAIState:
         while len(current_features) < 126:
             current_features.append(0.0)
 
+        # --- ADD HAND-TO-HAND DISTANCE (128 Dims) ---
         if len(sorted_hands) == 2:
             h1_w, h2_w = sorted_hands[0].landmark[0], sorted_hands[1].landmark[0]
             current_features.append(math.hypot(h1_w.x - h2_w.x, h1_w.y - h2_w.y))
+           
             h1_i, h2_i = sorted_hands[0].landmark[8], sorted_hands[1].landmark[8]
             current_features.append(math.hypot(h1_i.x - h2_i.x, h1_i.y - h2_i.y))
         else:
             current_features.extend([1.0, 1.0])
            
-        # --- CRITICAL FIX 2: Rate-limit appending to match the 10 FPS training data! ---
-        now = time.time()
-        if (now - getattr(self, 'last_feature_time', 0.0)) >= 0.1:
-            self.lstm_sequence_buffer.append(current_features)
-            self.last_feature_time = now
-            
-            # Only run inference if we actually added a new frame and the buffer is full
-            if len(self.lstm_sequence_buffer) == 30:
-                seq_array = np.array([list(self.lstm_sequence_buffer)], dtype=np.float32)
-                pred = self.manager.run_who_lstm(seq_array)
-                
-                self.prediction_buffer.append(pred)
-                self.last_stable_step = Counter(self.prediction_buffer).most_common(1)[0][0]
-        
-        return self.last_stable_step
+        # --- ADD TO LSTM 30-FRAME TIME SEQUENCE ---
+        self.lstm_sequence_buffer.append(current_features)
+       
+        # Wait for motion before predicting
+        if len(self.lstm_sequence_buffer) < 30:
+            return 0
+           
+        # Convert deque to shape (1, 30, 128) float32 numpy array
+        seq_array = np.array([list(self.lstm_sequence_buffer)], dtype=np.float32)
+       
+        # Execute ONNX inference
+        pred = self.manager.run_who_lstm(seq_array)
+       
+        self.prediction_buffer.append(pred)
+        most_common = Counter(self.prediction_buffer).most_common(1)[0][0]
+        return most_common
 
     def get_smoothed_step(self):
         if not self.prediction_buffer:
