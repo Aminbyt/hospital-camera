@@ -2,9 +2,10 @@
 import os
 import cv2
 from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QProgressBar
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal,QTimer
 from PyQt5.QtGui import QFont, QImage, QPixmap
 import config
+
 
 class DashboardTab(QWidget):
     """Main dashboard showing protocol status and hand washing timer."""
@@ -13,13 +14,19 @@ class DashboardTab(QWidget):
     auth_requested = pyqtSignal()
     roi_requested = pyqtSignal()
 
-    def __init__(self,sink_name = "CAMERA 1", parent=None):
+    def __init__(self, sink_name="CAMERA 1", parent=None):
         super().__init__(parent)
         self.sink_name = sink_name
         self.parent_window = parent
-        self.last_frame =None
+        self.last_frame = None
+        self.latest_render_frame = None  
+        
         self.build_ui()
-    
+        
+        # --- START LOCAL RENDER TIMER (10 FPS) ---
+        self.render_timer = QTimer(self)
+        self.render_timer.timeout.connect(self._render_video)
+        self.render_timer.start(33)  # 100 ms = 10 FPS
 
     def build_ui(self):
         """Build the dashboard UI."""
@@ -172,19 +179,32 @@ class DashboardTab(QWidget):
         self.auth_requested.emit()
 
     def update_video(self, frame):
-        """Update video display."""
+        """Fast O(1) operation: Store the incoming frame and exit instantly."""
         self.last_frame = frame.copy()
+        self.latest_render_frame = frame
+
+    def _render_video(self):
+        """Rate-limited heavy UI processing (RGB conversion, QImage scaling)."""
+        if self.latest_render_frame is None:
+            return
+            
+        # Consume the frame so we don't process it twice
+        frame = self.latest_render_frame
+        self.latest_render_frame = None
+        
+        # Heavy processing: Color conversion and scaling
         rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
         q_img = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        
         self.video_label.setPixmap(QPixmap.fromImage(q_img).scaled(
             self.video_label.width(), self.video_label.height(), Qt.KeepAspectRatio))
 
     def set_identity(self, user_name, authenticated=True):
         """Set identity display."""
         if authenticated:
-            self.identity_label.setText(f"USER: {user_name.upper()} ✅")
+            self.identity_label.setText(f"USER: {user_name.upper()}")
             self.identity_label.setStyleSheet("color: #1b4332;")
         else:
             self.identity_label.setText("USER: NOT AUTHENTICATED")
@@ -216,11 +236,11 @@ class DashboardTab(QWidget):
     def set_master_status(self, ready=False):
         """Set master status display."""
         if ready:
-            self.master_status.setText("STATUS: PROCEED TO Operating Room ✅")
+            self.master_status.setText("STATUS: PROCEED TO Operating Room")
             self.master_status.setStyleSheet(
                 "color: #ffffff; background-color: #000000; border: 2px solid #000000; padding: 20px;")
         else:
-            self.master_status.setText("STATUS: ACTION REQUIRED ⚠️")
+            self.master_status.setText("STATUS: ACTION REQUIRED")
             self.master_status.setStyleSheet(
                 "color: #000000; background-color: #ffffff; border: 2px solid #000000; padding: 20px;")
 
@@ -251,8 +271,8 @@ class DashboardTab(QWidget):
         if not data['check_mask'] and not data['check_hat']:
             self.set_ppe_status("", "", disabled=True)
         else:
-            m_text = "VERIFIED ✅" if data['mask'] else "MISSING ❌"
-            h_text = "VERIFIED ✅" if data['hat'] else "MISSING ❌"
+            m_text = "VERIFIED  " if data['mask'] else "MISSING  "
+            h_text = "VERIFIED  " if data['hat'] else "MISSING  "
             self.set_ppe_status(m_text, h_text)
 
         # Update Wash Visuals

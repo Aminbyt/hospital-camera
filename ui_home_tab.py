@@ -1,6 +1,6 @@
 """Home Summary Tab - Displays a modern UI card grid of all active sinks."""
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QGridLayout, QFrame, QLabel, QProgressBar
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 import config
 
@@ -10,7 +10,13 @@ class HomeSummaryTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.sink_cards = {}
+        self.latest_data = {}  # In-memory store for incoming background data
         self.build_ui()
+        
+        # --- START LOCAL RENDER TIMER (approx 6.6 FPS) ---
+        self.render_timer = QTimer(self)
+        self.render_timer.timeout.connect(self._render_data)
+        self.render_timer.start(150)
 
     def build_ui(self):
         layout = QVBoxLayout(self)
@@ -133,37 +139,43 @@ class HomeSummaryTab(QWidget):
         }
         return card, labels
 
-    def update_sink_data(self, sink_name, data):
-        """Triggered automatically by the background threads to update the UI."""
-       
-        # --- THE FIX: Convert "SINK_1" to "SINK 1" so the dictionary finds it! ---
-        clean_name = sink_name.replace("_", " ")
+    def update_sink_data(self, sink_name, state_obj):
+        """Fast O(1) operation: Store the incoming SinkState reference."""
+        self.latest_data[sink_name] = state_obj
 
-        if clean_name not in self.sink_cards:
-            return
-           
-        labels = self.sink_cards[clean_name]
-       
-        # Update User Status & Color
-        user = data.get('user', 'EMPTY')
-        labels['user'].setText(f"USER: {user}")
-        if user != 'EMPTY':
-            labels['user'].setStyleSheet("color: #1b4332; border: none; background: transparent;")
-        else:
-            labels['user'].setStyleSheet("color: #dc3545; border: none; background: transparent;")
-
-        # Update PPE Status
-        mask = "✅" if data.get('mask', False) else "❌"
-        hat = "✅" if data.get('hat', False) else "❌"
-        labels['ppe'].setText(f"MASK: {mask}   |   HAT: {hat}")
-
-        # Update Progress Bar and the new Timer Text
-        wash_time = int(data.get('wash_time', 0))
-        labels['progress'].setValue(wash_time)
-        labels['time'].setText(f"{wash_time} SECONDS")
-       
-        # Update Status Text
-        labels['status'].setText(f"STATUS: {data.get('wash_status', 'STANDBY')}")
-
+    def _render_data(self):
+        """Rate-limited UI update loop that paints the grid from state objects."""
+        for sink_name, state in self.latest_data.items():
+            clean_name = sink_name.replace("_", " ")
+            if clean_name not in self.sink_cards:
+                continue
+                
+            labels = self.sink_cards[clean_name]
+            
+            # Read via attributes instead of dictionary get
+            labels['user'].setText(f"USER: {state.user}")
+            if state.user != 'EMPTY':
+                labels['user'].setStyleSheet("color: #1b4332; border: none; background: transparent;")
+            else:
+                labels['user'].setStyleSheet("color: #dc3545; border: none; background: transparent;")
+            
+            mask = "✅" if state.has_mask else "❌"
+            hat = "✅" if state.has_hat else "❌"
+            labels['ppe'].setText(f"MASK: {mask}   |   HAT: {hat}")
+            
+            labels['progress'].setValue(int(state.wash_time))
+            labels['time'].setText(f"{int(state.wash_time)} SECONDS")
+            
+            if "DISCONNECTED" in state.auth_message or "ERROR" in state.auth_message or "CONNECTING" in state.auth_message:
+                status_text = "CAMERA OFFLINE / RECONNECTING"
+                labels['status'].setStyleSheet("color: #dc3545; border: none; background: transparent;")
+            elif state.wash_status_text == "STANDBY":
+                status_text = "STANDBY"
+                labels['status'].setStyleSheet("color: #495057; border: none; background: transparent;")
+            else:
+                status_text = state.wash_status_text
+                labels['status'].setStyleSheet("color: #1b4332; border: none; background: transparent;")
+                
+            labels['status'].setText(f"STATUS: {status_text}")
 
 

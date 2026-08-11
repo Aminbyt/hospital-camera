@@ -1,96 +1,84 @@
-"""Main Application - Hospital AI Smart Scrub Sink Kiosk."""
+"""Main Application (Dumb Client) - Hospital AI Smart Scrub Sink Kiosk."""
 import sys
-import os
+import json
+import cv2
+import numpy as np
+import zmq
 
-# --- 1. SET CRITICAL ENVIRONMENT VARIABLES BEFORE ANY IMPORTS ---
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
-os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-os.environ['OMP_NUM_THREADS'] = '2'  # Prevents CPU thread starvation!
-
-# --- 2. REGISTER DLL PATHS FOR PYINSTALLER ---
-if getattr(sys, 'frozen', False):
-    base_dir = sys._MEIPASS
-    torch_lib_dir = os.path.join(base_dir, 'torch', 'lib')
-    mediapipe_dir = os.path.join(base_dir, 'mediapipe')
-    onnx_dir = os.path.join(base_dir, 'onnxruntime', 'capi')
-   
-    # A. Register DLL directories with Windows
-    if hasattr(os, 'add_dll_directory'):
-        os.add_dll_directory(base_dir)
-        if os.path.exists(torch_lib_dir):
-            os.add_dll_directory(torch_lib_dir)
-        if os.path.exists(mediapipe_dir):
-            os.add_dll_directory(mediapipe_dir)
-        if os.path.exists(onnx_dir):
-            os.add_dll_directory(onnx_dir)
-           
-    # B. Force-inject into Windows PATH for legacy C++ sub-dependencies
-    os.environ['PATH'] = f"{base_dir};{torch_lib_dir};{mediapipe_dir};{onnx_dir};" + os.environ.get('PATH', '')
-   
-    # C. UPGRADED DLL LOADER: Pre-loads both PyTorch AND ONNX Runtime DLLs!
-    import ctypes
-    import glob
-    target_dlls = glob.glob(os.path.join(torch_lib_dir, "*.dll")) + glob.glob(os.path.join(onnx_dir, "*.dll"))
-    loaded_dlls = set()
-    for pass_num in range(1, 4):
-        for dll_path in target_dlls:
-            if dll_path not in loaded_dlls:
-                try:
-                    ctypes.CDLL(dll_path)
-                    loaded_dlls.add(dll_path)
-                except Exception:
-                    pass
-    print(f"[BOOT SUCCESS] Pre-loaded {len(loaded_dlls)} PyTorch & ONNX Runtime DLLs into memory!")
-# ---------------------------------------------
-
-# --- 3. CRITICAL IMPORT ORDER: MEDIAPIPE, ONNXRUNTIME & INSIGHTFACE FIRST ---
-try:
-    import mediapipe as mp
-    print("[BOOT SUCCESS] MediaPipe C++ framework bindings initialized cleanly!")
-except Exception as e:
-    print(f"[BOOT WARNING] MediaPipe early import note: {e}")
-
-try:
-    import onnxruntime
-    import insightface
-    print("[BOOT SUCCESS] ONNX Runtime & InsightFace C++ engines initialized cleanly!")
-except Exception as e:
-    print(f"[BOOT WARNING] ONNX/InsightFace early import note: {e}")
-
-import torch
-# ----------------------------------------------------------------------------
-
-# --- 4. INITIALIZE MASTER LOGGER ---
-try:
-    from logger_setup import setup_system_logger
-    logger = setup_system_logger()
-except ImportError:
-    pass
-# -----------------------------------
-
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QPushButton, QStackedWidget, QLabel
-)
-from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
+                             QPushButton, QStackedWidget, QLabel)
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 
 import config
 from ui_home_tab import HomeSummaryTab
 from ui_dashboard_tab import DashboardTab
 from ui_registration_tab import RegistrationTab
 from ui_settings_tab import SettingsTab
-from camrea_worker import CameraWorker
-from sink_calibration import SinkCalibration, create_roi_dialog
-from send_daily_reports import DailyReportThread , MonthlyReportThread
-from heartbeat_worker import HeartbeatThread
 
-class ScrubSinkKiosk(QMainWindow):
-    """Master Control Center."""
+class StateWrapper:
+    """Utility to convert the incoming JSON dictionary back into an object and dictionary format for the UI."""
+    def __init__(self, dictionary):
+        self._dictionary = dictionary
+        for key, value in dictionary.items():
+            setattr(self, key, value)
+
+    def __getitem__(self, key):
+        """Allows bracket lookup (e.g. state_obj['user']) for legacy UI tabs."""
+        return self._dictionary[key]
+
+    def get(self, key, default=None):
+        """Allows dictionary .get() safety fallback."""
+        return self._dictionary.get(key, default)
+
+class ZmqSubscriberThread(QThread):
+    """Listens for ZMQ broadcasts from the headless engine."""
+    state_received = pyqtSignal(str, object)
+    frame_received = pyqtSignal(str, np.ndarray)
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Hospital AI - Master Control Center")
+        self.running = True
+        self.context = zmq.Context()
+        self.socket = self.context.socket(zmq.SUB)
+        self.socket.connect("tcp://127.0.0.1:5555")
+        self.socket.setsockopt_string(zmq.SUBSCRIBE, "")  # Listen to all sink topics
+
+    def run(self):
+        while self.running:
+            try:
+                # NOBLOCK prevents the UI from freezing if the engine stops sending
+                topic, state_json, frame_bytes = self.socket.recv_multipart(flags=zmq.NOBLOCK)
+                
+                sink_id = topic.decode('utf-8')
+                state_dict = json.loads(state_json.decode('utf-8'))
+                state_obj = StateWrapper(state_dict)
+                
+                self.state_received.emit(sink_id, state_obj)
+
+# --- FIX 3B: Reconstruct raw bytes instantly ---
+                if frame_bytes and state_dict.get("frame_shape"):
+                    np_arr = np.frombuffer(frame_bytes, dtype=np.uint8)
+                    frame = np_arr.reshape(state_dict["frame_shape"])
+                    self.frame_received.emit(sink_id, frame)
+                        
+            except zmq.Again:
+                self.msleep(10)  # Sleep briefly if no message is waiting
+            except Exception as e:
+                print(f"[UI ERROR] ZMQ Rx Error: {e}")
+
+    def stop(self):
+        self.running = False
+        self.wait(2000)
+        self.socket.close()
+        self.context.term()
+
+
+class ScrubSinkKiosk(QMainWindow):
+    """Master Control Center - UI Only."""
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Hospital AI - Master Control Center (Client)")
         self.setGeometry(50, 50, 1400, 800)
         self.setStyleSheet(config.STYLESHEET)
 
@@ -109,14 +97,12 @@ class ScrubSinkKiosk(QMainWindow):
         sidebar_layout.setSpacing(15)
         sidebar_layout.setContentsMargins(10, 30, 10, 30)
        
-        # Sidebar Logo/Title
         title_lbl = QLabel("SMART SCRUB\nCONTROL CENTER")
         title_lbl.setStyleSheet("font-size: 16px; font-weight: bold; text-align: center;")
         title_lbl.setAlignment(Qt.AlignCenter)
         sidebar_layout.addWidget(title_lbl)
         sidebar_layout.addSpacing(30)
 
-        # Create Navigation Buttons
         self.buttons = {}
         nav_items = ["HOME", "SINK 1", "SINK 2", "SINK 3", "SINK 4", "SINK 5", "REGISTRATION", "SETTINGS"]
        
@@ -137,27 +123,24 @@ class ScrubSinkKiosk(QMainWindow):
         self.content_stack = QStackedWidget()
         main_layout.addWidget(self.content_stack, stretch=1)
 
-        # 1. Initialize Pages
         self.page_home = HomeSummaryTab()
-        self.page_cam1 = DashboardTab(sink_name="SINK 1")  # We will pass specific sink names to these later
-        self.page_cam2 = DashboardTab(sink_name="SINK 2")
-        self.page_cam3 = DashboardTab(sink_name="SINK 3")
-        self.page_cam4 = DashboardTab(sink_name="SINK 4")
-        self.page_cam5 = DashboardTab(sink_name="SINK 5")
+        self.page_cam1 = DashboardTab(sink_name="SINK_1")
+        self.page_cam2 = DashboardTab(sink_name="SINK_2")
+        self.page_cam3 = DashboardTab(sink_name="SINK_3")
+        self.page_cam4 = DashboardTab(sink_name="SINK_4")
+        self.page_cam5 = DashboardTab(sink_name="SINK_5")
         self.page_reg = RegistrationTab()
         self.page_set = SettingsTab()
 
-        # 2. Add Pages to Stack
-        self.content_stack.addWidget(self.page_home) # Index 0
-        self.content_stack.addWidget(self.page_cam1) # Index 1
-        self.content_stack.addWidget(self.page_cam2) # Index 2
-        self.content_stack.addWidget(self.page_cam3) # Index 3
-        self.content_stack.addWidget(self.page_cam4) # Index 4
-        self.content_stack.addWidget(self.page_cam5) # Index 5
-        self.content_stack.addWidget(self.page_reg)  # Index 6
-        self.content_stack.addWidget(self.page_set)  # Index 7
+        self.content_stack.addWidget(self.page_home) 
+        self.content_stack.addWidget(self.page_cam1) 
+        self.content_stack.addWidget(self.page_cam2) 
+        self.content_stack.addWidget(self.page_cam3) 
+        self.content_stack.addWidget(self.page_cam4) 
+        self.content_stack.addWidget(self.page_cam5) 
+        self.content_stack.addWidget(self.page_reg)  
+        self.content_stack.addWidget(self.page_set)  
 
-        # 3. Connect Sidebar Buttons to change pages
         self.buttons["HOME"].clicked.connect(lambda: self.content_stack.setCurrentIndex(0))
         self.buttons["SINK 1"].clicked.connect(lambda: self.content_stack.setCurrentIndex(1))
         self.buttons["SINK 2"].clicked.connect(lambda: self.content_stack.setCurrentIndex(2))
@@ -167,99 +150,45 @@ class ScrubSinkKiosk(QMainWindow):
         self.buttons["REGISTRATION"].clicked.connect(lambda: self.content_stack.setCurrentIndex(6))
         self.buttons["SETTINGS"].clicked.connect(lambda: self.content_stack.setCurrentIndex(7))
 
-                # --- INITIALIZE THE 5 BACKGROUND AI THREADS ---
-        self.workers = {}
-       
-        # Pull camera mappings from config (e.g., SINK_1: 0, SINK_2: 1)
-        for sink_id, cam_index in config.SINK_CAMERAS.items():
-            worker = CameraWorker(sink_name=sink_id, camera_index=cam_index)
-           
+        # --- START ZMQ SUBSCRIBER ---
+        self.zmq_listener = ZmqSubscriberThread()
+        self.zmq_listener.state_received.connect(self.route_state_update)
+        self.zmq_listener.frame_received.connect(self.route_frame_update)
+        self.zmq_listener.start()
 
-            worker.raw_frame_ready.connect(lambda frame, s=sink_id: self.page_reg.set_frame(s, frame))
+    def route_state_update(self, sink_id, state_obj):
+        """Routes incoming IPC state to the correct UI tabs."""
+        # Update Home Overview
+        self.page_home.update_sink_data(sink_id, state_obj)
+        
+        # Update Specific Dashboard
+        dashboard_map = {
+            "SINK_1": self.page_cam1,
+            "SINK_2": self.page_cam2,
+            "SINK_3": self.page_cam3,
+            "SINK_4": self.page_cam4,
+            "SINK_5": self.page_cam5,
+        }
+        if sink_id in dashboard_map:
+            dashboard_map[sink_id].update_from_worker(state_obj)
 
-            # 2. Route the video frame AND UI data to the correct Dashboard Tabs
-            if sink_id == "SINK_1":
-                worker.frame_ready.connect(self.page_cam1.update_video)
-                worker.dashboard_data.connect(self.page_cam1.update_from_worker)
-                self.page_cam1.roi_requested.connect(lambda w=worker, p=self.page_cam1: self.open_roi_dialog(w, p))
-               
-            elif sink_id == "SINK_2":
-                worker.frame_ready.connect(self.page_cam2.update_video)
-                worker.dashboard_data.connect(self.page_cam2.update_from_worker)
-                self.page_cam2.roi_requested.connect(lambda w=worker, p=self.page_cam2: self.open_roi_dialog(w, p))
-               
-            elif sink_id == "SINK_3":
-                worker.frame_ready.connect(self.page_cam3.update_video)
-                worker.dashboard_data.connect(self.page_cam3.update_from_worker)
-                self.page_cam3.roi_requested.connect(lambda w=worker, p=self.page_cam3: self.open_roi_dialog(w, p))
-               
-            elif sink_id == "SINK_4":
-                worker.frame_ready.connect(self.page_cam4.update_video)
-                worker.dashboard_data.connect(self.page_cam4.update_from_worker)
-                self.page_cam4.roi_requested.connect(lambda w=worker, p=self.page_cam4: self.open_roi_dialog(w, p))
-               
-            elif sink_id == "SINK_5":
-                worker.frame_ready.connect(self.page_cam5.update_video)
-                worker.dashboard_data.connect(self.page_cam5.update_from_worker)
-                self.page_cam5.roi_requested.connect(lambda w=worker, p=self.page_cam5: self.open_roi_dialog(w, p))
-
-            # 3. Route text data to the Home Overview Tab
-            worker.data_ready.connect(self.page_home.update_sink_data)
-           
-            # Save worker to memory and start it!
-            self.workers[sink_id] = worker
-            worker.start()
-
-        # --- CONNECT SETTINGS BUTTONS TO WORKERS ---
-        # When you change settings, we loop through all 5 workers and update them!
-        self.page_set.toggles_changed.connect(self.master_update_toggles)
-        self.page_set.calibration_requested.connect(self.master_trigger_calibration)
-
-        self.master_update_toggles()
-
-        self.report_thread =DailyReportThread()
-        self.report_thread.start()
-
-        self.monthly_thread = MonthlyReportThread()
-        self.monthly_thread.start()
-
-        self.heartbeat_thread = HeartbeatThread()
-        self.heartbeat_thread.start()
-
-    def open_roi_dialog(self, worker, page_widget):
-        """Pauses, opens the drawing window, and saves the new red line to the specific camera."""
-        if not hasattr(page_widget, 'last_frame') or page_widget.last_frame is None:
-            return
-           
-        # Open the drawing popup
-        accepted, new_roi = create_roi_dialog(self, page_widget.last_frame, worker.scrub_roi)
-       
-        # If the user clicked "SAVE", send it to the background AI thread!
-        if accepted:
-            worker.set_manual_roi(new_roi)
+    def route_frame_update(self, sink_id, frame):
+        """Routes incoming video frames to the currently visible tab."""
+        current_idx = self.content_stack.currentIndex()
+        
+        # Only process the frame if we are actually looking at that specific dashboard
+        dashboard_indices = {"SINK_1": 1, "SINK_2": 2, "SINK_3": 3, "SINK_4": 4, "SINK_5": 5}
+        if sink_id in dashboard_indices and current_idx == dashboard_indices[sink_id]:
+            dashboard = getattr(self, f"page_cam{sink_id.split('_')[1]}")
+            dashboard.update_video(frame)
             
-    def master_update_toggles(self):
-        toggles = self.page_set.get_detection_toggles()
-        for worker in self.workers.values():
-            worker.update_toggles(toggles['mask'], toggles['hat'], toggles['wash'],toggles.get('record',True))
-
-    def master_trigger_calibration(self):
-        for worker in self.workers.values():
-            worker.trigger_calibration()
+        # Route to registration tab if active
+        if current_idx == 6:
+            self.page_reg.set_frame(sink_id, frame)
 
     def closeEvent(self, event):
-        """Safely shut down all 5 cameras when closing the app."""
-        if hasattr(self , "report_thread"):
-            self.report_thread.stop()
-
-        if hasattr(self , "heartbeat_thread"):
-            self.heartbeat_thread.stop()
-            
-        if hasattr(self, "monthly_thread"):
-            self.monthly_thread.stop()
-            
-        for worker in self.workers.values():
-            worker.stop()
+        """Clean UI teardown."""
+        self.zmq_listener.stop()
         event.accept()
 
 def main():

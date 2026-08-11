@@ -1,27 +1,77 @@
-"""Registration Tab UI Module - Handles staff registration interface."""
+"""Registration Tab UI Module - Handles staff registration interface asynchronously."""
 
 import os
 import cv2
+import json
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
-    QRadioButton, QGroupBox, QMessageBox,QComboBox
+    QRadioButton, QGroupBox, QMessageBox, QComboBox
 )
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QImage, QPixmap
 import config
-from data_logger import DataLogger
-from ai_models import reset_face_cache ,add_single_face_to_cache
+from ai_models import add_single_face_to_cache
+
+
+class RegistrationWorker(QThread):
+    """Background thread to handle heavy disk I/O and face caching without freezing the UI."""
+    success_signal = pyqtSignal(str, str, str, int)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, fname, lname, role, clean_frame):
+        super().__init__()
+        self.fname = fname
+        self.lname = lname
+        self.role = role
+        self.clean_frame = clean_frame
+
+    def run(self):
+        try:
+            # 1. Format folder path
+            full_name = f"{self.fname} {self.lname}"
+            clean_folder_name = f"{self.fname}_{self.lname}".replace(" ", "_")
+            user_dir = os.path.join(config.REG_PATH, clean_folder_name)
+            os.makedirs(user_dir, exist_ok=True)
+
+            # 2. Save/Update Role in user_info.json
+            info_path = os.path.join(user_dir, "user_info.json")
+            with open(info_path, "w") as f:
+                json.dump({"role": self.role}, f, indent=4)
+
+            # 3. Count existing photos for sequential naming
+            existing_photos = [f for f in os.listdir(user_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+            next_angle_num = len(existing_photos) + 1
+
+            # 4. Save image
+            file_name = f"angle_{next_angle_num}.jpg"
+            save_path = os.path.join(user_dir, file_name)
+            cv2.imwrite(save_path, self.clean_frame)
+
+            # 5. Inject into live RAM cache (Thread-safe call to FaceRecognitionService)
+            add_single_face_to_cache(clean_folder_name, save_path)
+
+            print(f"[REGISTRATION] Saved angle #{next_angle_num} for {full_name} ({self.role}) to {save_path}")
+            
+            # Emit success data back to the GUI thread
+            self.success_signal.emit(full_name, self.role, file_name, next_angle_num)
+
+        except Exception as e:
+            print(f"[REGISTRATION ERROR] {e}")
+            self.error_signal.emit(str(e))
+
+
 class RegistrationTab(QWidget):
     """Registration tab for adding new staff members."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_window = parent
         self.last_clean_frame = None
+        
         self.countdown_timer = QTimer()
         self.countdown_timer.timeout.connect(self.update_countdown)
         self.countdown_val = 0
-        self.data_logger = DataLogger()
+        
+        self.reg_worker = None  
         self.build_ui()
 
     def build_ui(self):
@@ -41,11 +91,9 @@ class RegistrationTab(QWidget):
 
         cam_group = QGroupBox("SELECT CAMERA SOURCE")
         cam_layout = QVBoxLayout(cam_group)
-
         self.cam_selector = QComboBox()
         self.cam_selector.addItems(["SINK 1","SINK 2","SINK 3","SINK 4","SINK 5"])
-        self.cam_selector.setStyleSheet("padding: 10px; font-size: 12xp; font-weight: bold; border: 1xp solid #000000;")
-
+        self.cam_selector.setStyleSheet("padding: 10px; font-size: 12px; font-weight: bold; border: 1px solid #000000;")
         cam_layout.addWidget(self.cam_selector)
         left_layout.addWidget(cam_group)
 
@@ -81,16 +129,16 @@ class RegistrationTab(QWidget):
         gender_layout.addWidget(self.radio_male)
         gender_layout.addWidget(self.radio_female)
         gender_layout.addStretch()
-
         form_layout.addWidget(gender_widget)
+
         left_layout.addWidget(form_group)
 
         self.capture_btn = QPushButton("LOOK AT CAMERA & START TIMER")
         self.capture_btn.setStyleSheet("background: #000000; color: #ffffff; padding: 15px; font-size: 14px;")
         self.capture_btn.clicked.connect(self.start_countdown)
         left_layout.addWidget(self.capture_btn)
-        left_layout.addStretch()
 
+        left_layout.addStretch()
         main_layout.addWidget(left_panel, stretch=1)
 
         # --- RIGHT SIDE: THE LIVE CAMERA ---
@@ -104,17 +152,16 @@ class RegistrationTab(QWidget):
         """Update the current camera frame only if it matches the selected dropdown sink."""
         clean_name = sink_name.replace("_", " ")
         if clean_name != self.cam_selector.currentText():
-            return  
-
+            return
+            
         self.last_clean_frame = frame.copy()
-       
+                
         if self.countdown_val > 0 and not self.capture_btn.isEnabled():
             self.display_frame_with_countdown(frame)
         else:
             self.display_frame(frame)
 
     def display_frame(self, frame):
-
         rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
@@ -123,7 +170,6 @@ class RegistrationTab(QWidget):
             self.reg_video_label.width(), self.reg_video_label.height(), Qt.KeepAspectRatio))
 
     def display_frame_with_countdown(self, frame):
-
         reg_frame = frame.copy()
         h, w = reg_frame.shape[:2]
         
@@ -145,7 +191,7 @@ class RegistrationTab(QWidget):
         if not fname or not lname:
             QMessageBox.warning(self, "ERROR", "First and Last name are required.")
             return
-        
+            
         if self.last_clean_frame is None:
             QMessageBox.warning(self, "ERROR", "Camera not ready.")
             return
@@ -158,63 +204,48 @@ class RegistrationTab(QWidget):
     def update_countdown(self):
         """Update countdown display."""
         self.countdown_val -= 1
-       
+        
         if self.countdown_val > 0:
             self.capture_btn.setText(f"TAKING PICTURE IN {self.countdown_val}...")
         else:
             self.countdown_timer.stop()
-            self.capture_btn.setText("PROCESSING...")
-            # This now correctly calls our updated multi-angle saving method below!
+            self.capture_btn.setText("PROCESSING & SAVING...")
             self.register_new_user()
 
     def register_new_user(self):
-        """Captures the current clean frame, saves role metadata, and appends reference photos."""
-        import json
+        """Dispatches the heavy file saving and AI caching to a background thread."""
         fname = self.reg_fname.text().strip().upper()
         lname = self.reg_lname.text().strip().upper()
         role = self.reg_role.text().strip().title() or "N/A"
 
         if not fname or not lname or self.last_clean_frame is None:
-            QMessageBox.warning(self, "ERROR", "Missing name or camera frame!")
             self.capture_btn.setText("LOOK AT CAMERA & START TIMER")
             self.capture_btn.setEnabled(True)
             return
 
-        # 1. Format folder path
-        full_name = f"{fname} {lname}"
-        clean_folder_name = f"{fname}_{lname}".replace(" ", "_")
-        user_dir = os.path.join(config.REG_PATH, clean_folder_name)
-        os.makedirs(user_dir, exist_ok=True)
+        # Start the background worker
+        self.reg_worker = RegistrationWorker(fname, lname, role, self.last_clean_frame.copy())
+        self.reg_worker.success_signal.connect(self._on_registration_success)
+        self.reg_worker.error_signal.connect(self._on_registration_error)
+        self.reg_worker.start()
 
-        # 2. Save/Update Role in user_info.json
-        info_path = os.path.join(user_dir, "user_info.json")
-        with open(info_path, "w") as f:
-            json.dump({"role": role}, f, indent=4)
-
-        # 3. Count existing photos for sequential naming
-        existing_photos = [f for f in os.listdir(user_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-        next_angle_num = len(existing_photos) + 1
-
-        # 4. Save image
-        file_name = f"angle_{next_angle_num}.jpg"
-        save_path = os.path.join(user_dir, file_name)
-        cv2.imwrite(save_path, self.last_clean_frame)
-
-        # 5. Inject into live RAM cache
-        add_single_face_to_cache(clean_folder_name, save_path)
-
-        # 6. Reset UI fields & show confirmation
+    def _on_registration_success(self, full_name, role, file_name, next_angle_num):
+        """Safely updates the GUI thread upon successful background processing."""
         self.reg_fname.clear()
         self.reg_lname.clear()
         self.reg_role.clear()
         self.capture_btn.setText("LOOK AT CAMERA & START TIMER")
         self.capture_btn.setEnabled(True)
-
+        
         QMessageBox.information(
             self,
             "SUCCESS",
             f"Saved {file_name} for {full_name}\nRole: {role}\nTotal reference angles stored: {next_angle_num}"
         )
-        print(f"[REGISTRATION] Saved angle #{next_angle_num} for {full_name} ({role}) to {save_path}")
 
-
+    def _on_registration_error(self, error_msg):
+        """Safely shows error popups on the GUI thread."""
+        self.capture_btn.setText("LOOK AT CAMERA & START TIMER")
+        self.capture_btn.setEnabled(True)
+        QMessageBox.critical(self, "ERROR", f"Failed to save registration data:\n{error_msg}")
+        

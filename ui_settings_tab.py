@@ -14,7 +14,7 @@ SETTINGS_FILE = os.path.join(config.DB_PATH, "settings.json")
 
 def load_saved_settings():
     """Loads settings from disk, defaulting all toggles to True if missing."""
-    defaults = {'mask': True, 'hat': True, 'wash': True, 'record': True}
+    defaults = {'mask': True, 'hat': True, 'wash': True}
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, 'r') as f:
@@ -67,18 +67,14 @@ class SettingsTab(QWidget):
         self.cb_wash = QCheckBox("VERIFY HAND WASHING")
         self.cb_wash.setChecked(saved_opts.get('wash', True))
 
-        self.cb_record = QCheckBox("RECORD VIDEO")
-        self.cb_record.setChecked(saved_opts.get('record', True))
 
         self.cb_mask.stateChanged.connect(self.on_toggles_changed)
         self.cb_hat.stateChanged.connect(self.on_toggles_changed)
         self.cb_wash.stateChanged.connect(self.on_toggles_changed)
-        self.cb_record.stateChanged.connect(self.on_toggles_changed)
 
         detect_layout.addWidget(self.cb_mask)
         detect_layout.addWidget(self.cb_hat)
         detect_layout.addWidget(self.cb_wash)
-        detect_layout.addWidget(self.cb_record)
 
         settings_layout.addWidget(detect_group)
 
@@ -181,5 +177,4 @@ class SettingsTab(QWidget):
             'mask': self.cb_mask.isChecked(),
             'hat': self.cb_hat.isChecked(),
             'wash': self.cb_wash.isChecked(),
-            'record': self.cb_record.isChecked()
         }

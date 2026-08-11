@@ -20,13 +20,12 @@ YOLO_MODEL_PATH = 'runs/detect/train/weights/best_openvino_model/'
 # Create necessary directories automatically
 os.makedirs(REG_PATH, exist_ok=True)
 os.makedirs(INFO_PATH, exist_ok=True)
-os.makedirs(os.path.join(DB_PATH, "RECORDINGS"), exist_ok=True)
 os.makedirs(os.path.join(DB_PATH, "LOGS"), exist_ok=True)
 
 # --- PERFORMANCE & STABILITY SETTINGS ---
 # Capture & UI Rates
 CAMERA_FPS = 20
-UI_FPS = 10
+UI_FPS = 30
 
 # AI Inference Rates (Target FPS)
 FACE_FPS = 5
@@ -36,7 +35,6 @@ WHO_FPS = 8
 
 # Queue Sizes
 FRAME_QUEUE_SIZE = 1
-RECORD_QUEUE_SIZE = 30
 
 # ONNX Runtime Thread Limits
 ORT_INTRA_THREADS = 2
@@ -68,6 +66,9 @@ WRIST_DISTANCE_THRESHOLD = 65
 HAND_SIZE_MULTIPLIER = 2.5
 MIN_BUBBLE_RADIUS = 250
 
+NETWORK_MAX_RETRIES = 3
+NETWORK_BACKOFF_BASE = 2.0  
+
 # --- UI STYLING ---
 STYLESHEET = """
     QMainWindow { background-color: #ffffff; }
@@ -88,8 +89,8 @@ STYLESHEET = """
 
 # --- SECURE BOT NOTIFICATION SETTINGS ---
 BOT_SERVICE_URL = os.getenv("BOT_SERVICE_URL", "https://tapi.bale.ai")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-BOT_CHAT_ID = os.getenv("BOT_CHAT_ID", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_ACTUAL_TOKEN_HERE")
+BOT_CHAT_ID = os.getenv("BOT_CHAT_ID", "PUT_YOUR_CHAT_ID_HERE")
 BOT_TIMEOUT = int(os.getenv("BOT_TIMEOUT", "3"))
 
 # Derived API Endpoints

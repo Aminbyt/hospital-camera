@@ -12,12 +12,12 @@ from sklearn.metrics import accuracy_score
 from collections import defaultdict
 
 # --- CONFIGURATION ---
-FRAMES_DIR = "./AI handwash/dataset-pskus/PSKUS_dataset/frames/trainval"
+FRAMES_DIR = "./AI handwash/dataset-pskus/PSKUS_dataset_preprocessed/frames/trainval"
 ONNX_SAVE_PATH = "who_cnn_lstm_model.onnx"
 MAX_SAMPLES_PER_CLASS = 15000
-SEQ_LEN = 30       # INCREASED: Look at 30 continuous frames (1 full second of motion)
-INPUT_DIM = 128    # INCREASED: 126 (coords) + 2 (hand-to-hand distances)
-HIDDEN_DIM = 64    # Lightweight hidden layer for fast CPU inference
+SEQ_LEN = 30       # DECREASED: 10 frames = 1 full second of motion at 10 FPS
+INPUT_DIM = 128    
+HIDDEN_DIM = 64    
 NUM_CLASSES = 7
 BATCH_SIZE = 64
 EPOCHS = 25
