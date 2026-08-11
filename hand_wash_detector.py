@@ -115,3 +115,32 @@ class HandWashDetector:
         
         # Blend the overlay for a transparent bubble effect (alpha = 0.2)
         return cv2.addWeighted(overlay, 0.2, frame, 0.8, 0)
+
+    def detect_washing(self, hand_results, frame_w, frame_h, sink_y_start, ai_models):
+        """RESTORED FROM MAIN BRANCH: Strict zone checking and hand intersection (touching)."""
+        if not hand_results or hand_results['count'] < 2:
+            return {'actively_washing': False, 'in_zone': False}
+
+        landmarks = hand_results['hand_results'].multi_hand_landmarks
+        
+        # 1. Enforce that wrists are below the red Alcohol Scrub Zone line
+        if sink_y_start is not None:
+            wrists_in_zone = 0
+            for hl in landmarks[:2]:
+                if int(hl.landmark[0].y * frame_h) >= sink_y_start:
+                    wrists_in_zone += 1
+            if wrists_in_zone < 2:
+                return {'actively_washing': False, 'in_zone': False}
+
+        # 2. Enforce that the bounding boxes of the hands physically intersect (touching)
+        box1 = ai_models.get_hand_bbox(landmarks[0], frame_w, frame_h)
+        box2 = ai_models.get_hand_bbox(landmarks[1], frame_w, frame_h)
+        
+        # Expand the boxes slightly (by 30 pixels) to account for 3D depth forgiveness
+        margin = 30
+        b1 = [box1[0]-margin, box1[1]-margin, box1[2]+margin, box1[3]+margin]
+        b2 = [box2[0]-margin, box2[1]-margin, box2[2]+margin, box2[3]+margin]
+        
+        actively_washing = ai_models.bboxes_intersect(b1, b2)
+        
+        return {'actively_washing': actively_washing, 'in_zone': True}

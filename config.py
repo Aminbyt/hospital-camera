@@ -107,13 +107,17 @@ WINDOW_HEIGHT = 700
 
 # --- SECURE CAMERA HARDWARE MAPPING ---
 
+import re
+
+# --- CAMERA HARDWARE MAPPING ---
+# --- CAMERA HARDWARE MAPPING ---
 def get_sink_cameras():
-    """Dynamically parses custom dictionary syntax from the .env file."""
+    """Dynamically parses custom dictionary or standard env syntax from the .env file."""
     sinks = {}
-    env_file = "hospital_camera.env"
+    env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hospital_camera.env")
     
     if not os.path.exists(env_file):
-        print(f"[WARNING] {env_file} not found!")
+        print(f"[WARNING] {env_file} not found! No cameras loaded.")
         return sinks
         
     with open(env_file, 'r') as f:
@@ -124,8 +128,9 @@ def get_sink_cameras():
             if not line or line.startswith('#'):
                 continue
             
-            # Match your custom syntax: "SINK_3": "rtsp..." or "SINK_3": 0,
-            match = re.search(r'"(SINK_\d+)"\s*:\s*(.*)', line)
+            # --- FIX: Match BOTH "SINK_1": 0 AND SINK_1=0 formats ---
+            match = re.search(r'["\']?(SINK_\d+)["\']?\s*[:=]\s*(.*)', line)
+            
             if match:
                 sink_name = match.group(1)
                 raw_val = match.group(2).strip()

@@ -305,46 +305,25 @@ class CameraWorker(QThread):
                 if self.check_wash and hand_results['detected']:
                     frame = self.ai_models.draw_hand_landmarks(frame, hand_results['hand_results'])
                     
-                    # --- RESTORED EXACT OLD LOGIC: Zone + Collision Check ---
-                    actively_washing = False
-                    landmarks = hand_results['hand_results'].multi_hand_landmarks
-                    
-                    # Must have at least 2 hands visible
-                    if landmarks and len(landmarks) >= 2 and self.sink_y_start is not None:
-                        # 1. Both wrists must be below the Alcohol Scrub Zone
-                        wrists_in_zone = 0
-                        for hl in landmarks:
-                            if int(hl.landmark[0].y * frame_h) >= self.sink_y_start:
-                                wrists_in_zone += 1
-                                
-                        # 2. Bounding boxes must physically intersect (hands touching)
-                        if wrists_in_zone >= 2:
-                            box1 = self.ai_models.get_hand_bbox(landmarks[0], frame_w, frame_h)
-                            box2 = self.ai_models.get_hand_bbox(landmarks[1], frame_w, frame_h)
-                            
-                            # Add a small margin for 3D depth forgiveness
-                            margin = 25
-                            b1 = [box1[0]-margin, box1[1]-margin, box1[2]+margin, box1[3]+margin]
-                            b2 = [box2[0]-margin, box2[1]-margin, box2[2]+margin, box2[3]+margin]
-                            
-                            if self.ai_models.bboxes_intersect(b1, b2):
-                                actively_washing = True
-                    # --------------------------------------------------------
-
+                    # --- RESTORED EXACT OLD LOGIC FROM MAIN BRANCH ---
+                    wash_info = self.wash_detector.detect_washing(
+                        hand_results, frame_w, frame_h, self.sink_y_start, self.ai_models
+                    )
+                
                     # ---> PREDICT LIVE WHO GESTURE FIRST <---
-                    if actively_washing:
+                    if wash_info['actively_washing']:
                         current_who_step = self.ai_models.predict_who_step(hand_results['hand_results'])
                         self.cached_who_step = current_who_step
-                        
+                    
                         is_valid_who_step = (1 <= current_who_step <= 6)
                         
-                        # ---> RESTORED OLD FIX: Timer ticks up for ANY scrubbing, ignoring WHO validity <---
+                        # ---> THE FIX: Timer ticks up for ANY scrubbing, ignoring WHO validity <---
                         self.wash_detector.update_wash_time(True)
 
                         # But we still quietly track the WHO steps for the final Bot report!
                         if is_valid_who_step:
                             self.wash_detector.completed_steps.add(current_who_step)
-
+                    
                         step_labels = {
                             0: "PAUSED: Incorrect Gesture / Transition",
                             1: "Step 1: Palm to Palm",
@@ -359,19 +338,18 @@ class CameraWorker(QThread):
                         # Draw banner (Red/Orange if step 0, Bright Green if steps 1-6)
                         bg_color = (27, 67, 50) if is_valid_who_step else (0, 0, 150)
                         border_color = (0, 255, 0) if is_valid_who_step else (0, 165, 255)
-
+                    
                         cv2.rectangle(frame, (20, 30), (460, 80), bg_color, -1)
                         cv2.rectangle(frame, (20, 30), (460, 80), border_color, 2)
                         cv2.putText(frame, label_text, (35, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (255, 255, 255), 2)
                     else:
                         self.wash_detector.update_wash_time(False)
-                        self.cached_who_step = 0  # Reset cache when washing stops
-
+                        self.ai_models.clear_buffer()
+                    
                     frame = self.wash_detector.draw_bubble_zone(frame)
                 else:
                     self.wash_detector.update_wash_time(False)
-                    self.cached_who_step = 0  # Reset cache when hands leave  # Reset cache when hands leave
-
+                    self.ai_models.clear_buffer()
             # 5. DETERMINE MASTER STATUS
             master_ready = False
             if self.session_manager.is_authenticated():
