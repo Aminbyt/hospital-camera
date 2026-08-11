@@ -1,13 +1,13 @@
 """Configuration and constants for the Hospital AI System."""
-
+import re
 import os
 
 # --- ENVIRONMENT & SECRETS LOADING ---
 try:
     from dotenv import load_dotenv
-    load_dotenv()  # Loads variables from a local .env file if present
+    load_dotenv('hospital_camera.env')  # Loads variables from a local .env file if present
 except ImportError:
-    pass
+    print("WARNING: python-dotenv is not installed. Run 'pip install python-dotenv'")
 
 # --- PATHS ---
 desktop_path = os.path.join(os.environ['USERPROFILE'], 'Desktop')
@@ -106,18 +106,46 @@ WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 700
 
 # --- SECURE CAMERA HARDWARE MAPPING ---
+
 def get_sink_cameras():
-    """Dynamically builds camera endpoints without committing credentials."""
+    """Dynamically parses custom dictionary syntax from the .env file."""
     sinks = {}
+    env_file = "hospital_camera.env"
     
-    sink_1_src = os.getenv("SINK_1_CAM", "0")
-    sinks["SINK_1"] = int(sink_1_src) if sink_1_src.isdigit() else sink_1_src
-    
-    for i in range(2, 6):
-        cam_env = os.getenv(f"SINK_{i}_CAM")
-        if cam_env:
-            sinks[f"SINK_{i}"] = int(cam_env) if cam_env.isdigit() else cam_env
+    if not os.path.exists(env_file):
+        print(f"[WARNING] {env_file} not found!")
+        return sinks
+        
+    with open(env_file, 'r') as f:
+        for line in f:
+            line = line.strip()
             
+            # Skip comments and empty lines
+            if not line or line.startswith('#'):
+                continue
+            
+            # Match your custom syntax: "SINK_3": "rtsp..." or "SINK_3": 0,
+            match = re.search(r'"(SINK_\d+)"\s*:\s*(.*)', line)
+            if match:
+                sink_name = match.group(1)
+                raw_val = match.group(2).strip()
+                
+                # Clean trailing commas
+                if raw_val.endswith(','):
+                    raw_val = raw_val[:-1]
+                    
+                # Clean quotes for strings
+                if raw_val.startswith('"') and raw_val.endswith('"'):
+                    raw_val = raw_val[1:-1]
+                elif raw_val.startswith("'") and raw_val.endswith("'"):
+                    raw_val = raw_val[1:-1]
+                    
+                # Convert to integer if it's a webcam ID (like 0)
+                if raw_val.isdigit():
+                    sinks[sink_name] = int(raw_val)
+                else:
+                    sinks[sink_name] = raw_val
+                    
     return sinks
 
 SINK_CAMERAS = get_sink_cameras()
