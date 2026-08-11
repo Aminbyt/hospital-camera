@@ -369,7 +369,7 @@ class PerSinkAIState:
 
     def predict_who_step(self, hand_landmarks_data):
         if not hand_landmarks_data or not hand_landmarks_data.multi_hand_landmarks:
-            self.lstm_sequence_buffer.clear()
+            # FIX 1: Do NOT clear the buffer here! Just return the last known step.
             return self.last_stable_step
            
         sorted_hands = sorted(hand_landmarks_data.multi_hand_landmarks, key=lambda h: h.landmark[0].x)
@@ -399,18 +399,19 @@ class PerSinkAIState:
         else:
             current_features.extend([1.0, 1.0])
            
-        # RESTORED FROM MAIN: Append without timers (handled in camrea_worker now)
-        self.lstm_sequence_buffer.append(current_features)
+        # --- CRITICAL FIX 2: Rate-limit appending to match the 10 FPS training data! ---
+        now = time.time()
+        if (now - getattr(self, 'last_feature_time', 0.0)) >= 0.1:
+            self.lstm_sequence_buffer.append(current_features)
+            self.last_feature_time = now
             
-        if len(self.lstm_sequence_buffer) < 30:
-            return self.last_stable_step
-           
-        # --- EXECUTE ONNX INFERENCE ---
-        seq_array = np.array([list(self.lstm_sequence_buffer)], dtype=np.float32)
-        pred = self.manager.run_who_lstm(seq_array)
-        
-        self.prediction_buffer.append(pred)
-        self.last_stable_step = Counter(self.prediction_buffer).most_common(1)[0][0]
+            # Only run inference if we actually added a new frame and the buffer is full
+            if len(self.lstm_sequence_buffer) == 30:
+                seq_array = np.array([list(self.lstm_sequence_buffer)], dtype=np.float32)
+                pred = self.manager.run_who_lstm(seq_array)
+                
+                self.prediction_buffer.append(pred)
+                self.last_stable_step = Counter(self.prediction_buffer).most_common(1)[0][0]
         
         return self.last_stable_step
 

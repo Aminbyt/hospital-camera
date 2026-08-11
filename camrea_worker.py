@@ -315,20 +315,17 @@ class CameraWorker(QThread):
                     # ---> PREDICT LIVE WHO GESTURE FIRST <---
                     if wash_info['actively_washing']:
                         
-                        # --- FIX: Only push to the LSTM model if we have a FRESH moving hand frame! ---
                         if new_hand_data:
                             current_who_step = self.ai_models.predict_who_step(hand_results['hand_results'])
                             self.cached_who_step = current_who_step
                         else:
                             current_who_step = getattr(self, 'cached_who_step', 0)
-                        # ------------------------------------------------------------------------------
                     
                         is_valid_who_step = (1 <= current_who_step <= 6)
                         
                         # Timer ticks up for ANY scrubbing, ignoring WHO validity
                         self.wash_detector.update_wash_time(True)
 
-                        # But we still quietly track the WHO steps for the final Bot report!
                         if is_valid_who_step:
                             self.wash_detector.completed_steps.add(current_who_step)
                     
@@ -343,7 +340,6 @@ class CameraWorker(QThread):
                         }
                         label_text = step_labels.get(current_who_step, "Detecting...")
 
-                        # Draw banner (Red/Orange if step 0, Bright Green if steps 1-6)
                         bg_color = (27, 67, 50) if is_valid_who_step else (0, 0, 150)
                         border_color = (0, 255, 0) if is_valid_who_step else (0, 165, 255)
                     
@@ -352,12 +348,14 @@ class CameraWorker(QThread):
                         cv2.putText(frame, label_text, (35, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (255, 255, 255), 2)
                     else:
                         self.wash_detector.update_wash_time(False)
-                        self.ai_models.clear_buffer()
+                        # --- FIX 3: DO NOT WIPE THE BUFFER ON FLICKERS! ---
+                        self.cached_who_step = 0
                     
                     frame = self.wash_detector.draw_bubble_zone(frame)
                 else:
                     self.wash_detector.update_wash_time(False)
-                    self.ai_models.clear_buffer()
+                    # --- FIX 3: DO NOT WIPE THE BUFFER ON FLICKERS! ---
+                    self.cached_who_step = 0
             # 5. DETERMINE MASTER STATUS
             master_ready = False
             if self.session_manager.is_authenticated():
