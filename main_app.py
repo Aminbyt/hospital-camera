@@ -73,7 +73,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QPushButton, QStackedWidget, QLabel
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt , QTimer
 
 import config
 from ui_home_tab import HomeSummaryTab
@@ -173,10 +173,10 @@ class ScrubSinkKiosk(QMainWindow):
         # Pull camera mappings from config (e.g., SINK_1: 0, SINK_2: 1)
         for sink_id, cam_index in config.SINK_CAMERAS.items():
             worker = CameraWorker(sink_name=sink_id, camera_index=cam_index)
-           
-
-            worker.raw_frame_ready.connect(lambda frame, s=sink_id: self.page_reg.set_frame(s, frame))
-
+                        
+            # --- FIX 2: Direct, thread-safe connection! No lambda required. ---
+            worker.raw_frame_ready.connect(self.page_reg.set_frame)
+            # ------------------------------------------------------------------
             # 2. Route the video frame AND UI data to the correct Dashboard Tabs
             if sink_id == "SINK_1":
                 worker.frame_ready.connect(self.page_cam1.update_video)
@@ -226,6 +226,19 @@ class ScrubSinkKiosk(QMainWindow):
         self.heartbeat_thread = HeartbeatThread()
         self.heartbeat_thread.start()
 
+
+        # --- ADD THIS: MAIN UI FREEZE TRACKER ---
+        self.ui_watchdog_timer = QTimer(self)
+        self.ui_watchdog_timer.timeout.connect(self.log_ui_health)
+        self.ui_watchdog_timer.start(30000)  # Fires every 30 seconds
+        # ----------------------------------------
+
+    # --- ADD THIS METHOD DIRECTLY UNDER __INIT__ ---
+    def log_ui_health(self):
+        """If this stops printing, the PyQt UI thread has deadlocked."""
+        import logging
+        logging.info("[FREEZE_TRACKER] MAIN_UI Thread is ALIVE and responding to events.")
+
     def open_roi_dialog(self, worker, page_widget):
         """Pauses, opens the drawing window, and saves the new red line to the specific camera."""
         if not hasattr(page_widget, 'last_frame') or page_widget.last_frame is None:
@@ -241,7 +254,7 @@ class ScrubSinkKiosk(QMainWindow):
     def master_update_toggles(self):
         toggles = self.page_set.get_detection_toggles()
         for worker in self.workers.values():
-            worker.update_toggles(toggles['mask'], toggles['hat'], toggles['wash'],toggles.get('record',True))
+            worker.update_toggles(toggles['mask'], toggles['hat'], toggles['wash'])
 
     def master_trigger_calibration(self):
         for worker in self.workers.values():

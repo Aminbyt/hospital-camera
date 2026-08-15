@@ -10,7 +10,6 @@ from ai_models import AIModels, FaceRecognitionThread, recognize_face_sync
 from hand_wash_detector import HandWashDetector
 from sink_calibration import SinkCalibration
 from data_logger import DataLogger, UserSessionManager
-from video_recorder import VideoRecorder
 
 class ZeroLatencyGrabber:
     """A dedicated high-speed thread that constantly clears the camera buffer for BOTH IP and USB."""
@@ -20,6 +19,7 @@ class ZeroLatencyGrabber:
         self.frame = None
         self.stopped = False
         self.lock = threading.Lock()
+        self.last_frame_time = time.time()
 
     def start(self):
         threading.Thread(target=self.update, daemon=True).start()
@@ -41,6 +41,8 @@ class ZeroLatencyGrabber:
                 self.ret = ret
                 if ret:
                     self.frame = frame
+
+                    self.last_frame_time = time.time()
         stream.release()
 
     def read(self):
@@ -54,7 +56,7 @@ class ZeroLatencyGrabber:
 class CameraWorker(QThread):
     # Signals to send data back to the UI safely
     frame_ready = pyqtSignal(np.ndarray)   
-    raw_frame_ready = pyqtSignal(np.ndarray)
+    raw_frame_ready = pyqtSignal(str,np.ndarray)
     data_ready = pyqtSignal(str, dict) 
     dashboard_data = pyqtSignal(dict)  
 
@@ -70,14 +72,12 @@ class CameraWorker(QThread):
         self.wash_detector = HandWashDetector()
         self.session_manager = UserSessionManager()
         self.data_logger = DataLogger()
-        self.recorder = VideoRecorder(self.sink_name)
 
         self.sink_y_start = None
         self.scrub_roi = None
         self.check_mask = True
         self.check_hat = True
         self.check_wash = True
-        self.check_record = True
 
         self.auth_check_counter = 0
         self.auth_message = "WAITING FOR FACE..."
@@ -92,14 +92,34 @@ class CameraWorker(QThread):
         # We start the universal grabber here for BOTH USB and IP cameras!
         self.video_stream = ZeroLatencyGrabber(self.camera_index).start()       
 
+        last_freeze_check = time.time()
+
         while self.running:
+            now = time.time()
+            if now - last_freeze_check >=30.0:
+                logging.info(f"[FREEZE_TRACKER] {self.sink_name} Thread is ALIVE and looping.")
+                last_freeze_check = now
+            if now - self.video_stream.last_frame_time > 5.0:
+                logging.warning(f"[WATCHDOG] {self.sink_name} OpenCV stream hung! Force restarting hardware connection...")
+                
+                # Flag the old thread to stop (even if it's stuck, we abandon it)
+                self.video_stream.stop() 
+                
+                # Spawn a brand new connection
+                self.video_stream = ZeroLatencyGrabber(self.camera_index).start()
+                
+                # Reset the timer so it doesn't trigger again immediately
+                self.video_stream.last_frame_time = time.time() 
+                
+                # Give the hardware a second to warm up before looping
+                time.sleep(1) 
+                continue
             ret, frame = self.video_stream.read()
 
             if not ret or frame is None:
                 time.sleep(0.01)
                 continue
 
-            clean_record_frame = frame.copy()
 
             frame_h, frame_w = frame.shape[:2]
             clean_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -210,10 +230,7 @@ class CameraWorker(QThread):
                 if self.check_hat and not has_hat: master_ready = False
                 if self.check_wash and self.wash_detector.current_wash_time < config.MIN_WASH_TIME: master_ready = False
 
-            if self.session_manager.is_authenticated() and self.check_record:
-                if not self.recorder.is_recording:
-                    self.recorder.start_recording(self.session_manager.current_user, frame_w, frame_h)
-                self.recorder.add_frame(clean_record_frame)
+
 
             # 6. SEND DATA BACK TO UI
             summary_data = {
@@ -231,6 +248,7 @@ class CameraWorker(QThread):
                 'master_ready': master_ready
             }
 
+            self.raw_frame_ready.emit(self.sink_name,frame)
             self.frame_ready.emit(frame)
             self.data_ready.emit(self.sink_name, summary_data)
             self.dashboard_data.emit(summary_data)
@@ -266,8 +284,7 @@ class CameraWorker(QThread):
             self.session_manager.update_presence()
 
     def logout_user(self):
-        if self.recorder.is_recording:
-            self.recorder.stop_recording()
+
 
         if self.session_manager.is_authenticated():
             wash_duration = int(self.wash_detector.current_wash_time)
@@ -293,15 +310,12 @@ class CameraWorker(QThread):
         self.ai_models.clear_buffer()
 
 
-    def update_toggles(self, mask, hat, wash, record=True):
+    def update_toggles(self, mask, hat, wash):
         self.check_mask = mask
         self.check_hat = hat
         self.check_wash = wash
-        self.check_record = record
 
-        if not self.check_record and self.recorder.is_recording:
-            self.recorder.stop_recording()
-            logging.info(f"[{self.sink_name}] recording stopped by setting toggle")
+
     
     def set_manual_roi(self, roi):
         self.scrub_roi = roi
@@ -313,7 +327,6 @@ class CameraWorker(QThread):
 
     def stop(self):
         self.running = False
-
-        if self.recorder.is_recording:
-            self.recorder.stop_recording()
+        # DELETE: if self.recorder.is_recording: self.recorder.stop_recording()
+        self.video_stream.stop()
         self.wait()
