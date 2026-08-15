@@ -13,6 +13,7 @@ env/
 
 # AI Weights and Datasets (Crucial: Keep GitHub repo lightweight)
 *.pt
+*.env
 *.sh
 *.onnx
 *.engine
