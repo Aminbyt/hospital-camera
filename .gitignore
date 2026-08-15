@@ -45,6 +45,7 @@ AI handwash/dataset-pskus/PSKUS_dataset_who/
 AI handwash/handwash-master/
 
 *pskus_videosfinal_model.h5
+*hospital_camera.env
 *get-and-preprocess-dataset.sh
 *create_snippets.sh
 *who_rf_model.pkl
