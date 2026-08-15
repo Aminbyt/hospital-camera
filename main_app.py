@@ -175,8 +175,7 @@ class ScrubSinkKiosk(QMainWindow):
             worker = CameraWorker(sink_name=sink_id, camera_index=cam_index)
            
 
-            worker.raw_frame_ready.connect(lambda frame, s=sink_id: self.page_reg.set_frame(s, frame))
-
+            worker.raw_frame_ready.connect(self.page_reg.set_frame)
             # 2. Route the video frame AND UI data to the correct Dashboard Tabs
             if sink_id == "SINK_1":
                 worker.frame_ready.connect(self.page_cam1.update_video)

@@ -54,7 +54,7 @@ class ZeroLatencyGrabber:
 class CameraWorker(QThread):
     # Signals to send data back to the UI safely
     frame_ready = pyqtSignal(np.ndarray)   
-    raw_frame_ready = pyqtSignal(np.ndarray)
+    raw_frame_ready = pyqtSignal(str,object)
     data_ready = pyqtSignal(str, dict) 
     dashboard_data = pyqtSignal(dict)  
 
@@ -231,7 +231,7 @@ class CameraWorker(QThread):
                 'master_ready': master_ready
             }
 
-            self.frame_ready.emit(frame)
+            self.frame_ready.emit(frame.copy())
             self.data_ready.emit(self.sink_name, summary_data)
             self.dashboard_data.emit(summary_data)
 
