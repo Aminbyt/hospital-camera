@@ -81,4 +81,6 @@ SINK_CAMERAS = {
    # "SINK_3": "rtsp://admin:1937@asdF@192.168.1.103:554/cam/realmonitor?channel=1&subtype=1",
    # "SINK_4": "rtsp://admin:1937@asdF@192.168.1.104:554/cam/realmonitor?channel=1&subtype=1",
    # "SINK_5": "rtsp://admin:1937@asdF@192.168.1.105:554/cam/realmonitor?channel=1&subtype=1"
+
 }
+# --- CAMERA HARDWARE MAPPING ---

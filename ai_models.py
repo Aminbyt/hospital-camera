@@ -31,21 +31,25 @@ import pickle
 def initialize_face_engine(db_path):
     """Initializes InsightFace and loads staff photo embeddings ONCE at system boot!"""
     global GLOBAL_INSIGHT_APP, GLOBAL_DB_EMBEDDINGS
-   
-    try:
-        if GLOBAL_INSIGHT_APP is None:
-            print("\n[INFO] ==================================================")
-            print("[INFO] Initializing InsightFace Engine at system boot...")
-            from insightface.app import FaceAnalysis
-           
-            GLOBAL_INSIGHT_APP = FaceAnalysis(providers=['CPUExecutionProvider'])
-            # Keeping the lowered threshold from our earlier fix!
-            GLOBAL_INSIGHT_APP.prepare(ctx_id=0, det_thresh=0.35, det_size=(640, 640))
-            print("[INFO] InsightFace Engine initialized successfully!")
-            print("[INFO] ==================================================\n")
+    
+    # 1. FIXED INDENTATION: Aligned perfectly with 4 spaces
+    with FACE_LOCK: 
+        try:
+            if GLOBAL_INSIGHT_APP is None:
+                print("\n[INFO] ==================================================")
+                print("[INFO] Initializing InsightFace Engine at system boot...")
+                from insightface.app import FaceAnalysis
+               
+                # 2. UPGRADE RESTORED: We put the smarter model back!
+                GLOBAL_INSIGHT_APP = FaceAnalysis(name='antelopev2', providers=['CPUExecutionProvider'])
+                
+                # Keeping the lowered threshold from our earlier fix!
+                GLOBAL_INSIGHT_APP.prepare(ctx_id=0, det_thresh=0.35, det_size=(640, 640))
+                print("[INFO] InsightFace Engine initialized successfully!")
+                print("[INFO] ==================================================\n")
 
-        if not GLOBAL_DB_EMBEDDINGS and os.path.exists(db_path):
-            cache_path = os.path.join(config.DB_PATH, "face_cache.pkl")
+            if not GLOBAL_DB_EMBEDDINGS and os.path.exists(db_path):
+                cache_path = os.path.join(config.DB_PATH, "face_cache.pkl")
             
             # --- 1. TRY TO LOAD MEMORY CACHE FIRST ---
             if os.path.exists(cache_path):
@@ -89,8 +93,8 @@ def initialize_face_engine(db_path):
                 pickle.dump(GLOBAL_DB_EMBEDDINGS, f)
             print("[INFO] Face cache saved! Future start-ups will be instant.")
             
-    except Exception as e:
-        print(f"[ERROR] Failed to initialize InsightFace engine: {e}")
+        except Exception as e:
+            print(f"[ERROR] Failed to initialize InsightFace engine: {e}")
 
 
 def reset_face_cache():
@@ -151,7 +155,7 @@ def recognize_face_sync(frame_to_check, db_path=config.REG_PATH):
                 for saved_embedding in embeddings_list:
                     dist = np.sum(np.square(detected_face.normed_embedding - saved_embedding))
                    
-                    if dist < 0.48:
+                    if dist < 0.55:
                         if dist < min_dist:
                             min_dist = dist
                             best_match = name

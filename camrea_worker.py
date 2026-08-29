@@ -24,12 +24,11 @@ class ZeroLatencyGrabber:
     def start(self):
         threading.Thread(target=self.update, daemon=True).start()
         return self
-
+    
     def update(self):
         if isinstance(self.src, int):
+            # Keep DSHOW so Windows connects, but let the camera choose its own native resolution!
             stream = cv2.VideoCapture(self.src, cv2.CAP_DSHOW)
-            stream.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         else:
             stream = cv2.VideoCapture(self.src)
             
@@ -55,8 +54,8 @@ class ZeroLatencyGrabber:
 
 class CameraWorker(QThread):
     # Signals to send data back to the UI safely
-    frame_ready = pyqtSignal(np.ndarray)   
-    raw_frame_ready = pyqtSignal(str,np.ndarray)
+    frame_ready = pyqtSignal(object)   
+    raw_frame_ready = pyqtSignal(str,object)
     data_ready = pyqtSignal(str, dict) 
     dashboard_data = pyqtSignal(dict)  
 
@@ -248,8 +247,8 @@ class CameraWorker(QThread):
                 'master_ready': master_ready
             }
 
-            self.raw_frame_ready.emit(self.sink_name,frame)
-            self.frame_ready.emit(frame)
+            self.raw_frame_ready.emit(self.sink_name,frame.copy())
+            self.frame_ready.emit(frame.copy())
             self.data_ready.emit(self.sink_name, summary_data)
             self.dashboard_data.emit(summary_data)
 
