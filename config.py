@@ -76,7 +76,7 @@ WINDOW_HEIGHT = 700
 # --- CAMERA HARDWARE MAPPING ---
 # Dahua RTSP Format: rtsp://username:password@IP_Address:554/cam/realmonitor?channel=1&subtype=1
 SINK_CAMERAS = {
-    "SINK_1": 0
+    "SINK_1": 1
     #"SINK_2": "rtsp://admin:1937@asdF@192.168.1.102:554/cam/realmonitor?channel=1&subtype=1"
    # "SINK_3": "rtsp://admin:1937@asdF@192.168.1.103:554/cam/realmonitor?channel=1&subtype=1",
    # "SINK_4": "rtsp://admin:1937@asdF@192.168.1.104:554/cam/realmonitor?channel=1&subtype=1",

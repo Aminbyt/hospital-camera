@@ -24,7 +24,7 @@ if getattr(sys, 'frozen', False):
 # --- GLOBAL AI CACHE & MUTEX LOCK ---
 GLOBAL_INSIGHT_APP = None
 GLOBAL_DB_EMBEDDINGS = {}
-FACE_LOCK = threading.Lock()  # <-- PREVENTS ONNX RUNTIME C++ COLLISION DEADLOCKS!
+FACE_LOCK = threading.RLock() # <-- RLock prevents the thread from locking itself out!
 
 import pickle
 

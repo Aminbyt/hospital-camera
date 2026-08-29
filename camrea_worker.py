@@ -27,12 +27,11 @@ class ZeroLatencyGrabber:
     
     def update(self):
         if isinstance(self.src, int):
-            # Keep DSHOW so Windows connects, but let the camera choose its own native resolution!
+            # OBS Virtual Camera REQUIRES DirectShow to prevent the 1-second freeze!
             stream = cv2.VideoCapture(self.src, cv2.CAP_DSHOW)
         else:
             stream = cv2.VideoCapture(self.src)
-            
-        stream.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            stream.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         while not self.stopped:
             ret, frame = stream.read()
@@ -40,10 +39,8 @@ class ZeroLatencyGrabber:
                 self.ret = ret
                 if ret:
                     self.frame = frame
-
                     self.last_frame_time = time.time()
         stream.release()
-
     def read(self):
         with self.lock:
             return self.ret, self.frame.copy() if self.ret else None
